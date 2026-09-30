@@ -3,9 +3,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Video, Plus, Calendar, Copy, Link2, Clock,
-  Trash2, MoreHorizontal, Search, Bell, Menu,
-  Settings, HelpCircle, Home, AlignLeft, History,
+  Video, Plus, Calendar, Copy, Link2, Clock, Trash2, MoreHorizontal, Search,
+  Menu, History, ExternalLink, ChevronRight, ChevronDown, MessageCircle,
 } from "lucide-react";
 import { api, apiErrorMessage } from "@/lib/api";
 import { getHostToken, removeHostToken, saveHostToken } from "@/lib/hostTokens";
@@ -13,16 +12,6 @@ import type { Meeting, RecentMeeting } from "@/lib/types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function useClock() {
-  const [now, setNow] = useState<Date | null>(null);
-  useEffect(() => {
-    setNow(new Date());
-    const id = setInterval(() => setNow(new Date()), 1_000);
-    return () => clearInterval(id);
-  }, []);
-  return now;
-}
-
 function formatMeetingTime(iso: string) {
   return new Date(iso).toLocaleString([], {
     weekday: "short", month: "short", day: "numeric",
@@ -44,7 +33,7 @@ function copyText(text: string) {
   navigator.clipboard.writeText(text).catch(() => {});
 }
 
-// ─── Sidebar Nav ──────────────────────────────────────────────────────────────
+// ─── Shared bits ──────────────────────────────────────────────────────────────
 type Tab = "home" | "meetings" | "history";
 
 /**
@@ -53,6 +42,120 @@ type Tab = "home" | "meetings" | "history";
  */
 const REVEAL_ON_HOVER =
   "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100";
+
+/** Placeholder identity until sign-in exists; the name and photo will come from the account. */
+const GUEST = { name: "Guest", plan: "Basic" };
+
+function ZoomWordmark() {
+  return (
+    <span
+      className="select-none text-[32px] font-black lowercase leading-none tracking-tight text-[#0b5cff]"
+      aria-label="Zoom"
+    >
+      zoom
+    </span>
+  );
+}
+
+function GuestAvatar({ size }: { size: number }) {
+  return (
+    <div
+      className="flex shrink-0 select-none items-center justify-center font-semibold text-white"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: Math.round(size * 0.2),
+        fontSize: size * 0.42,
+        background: "linear-gradient(135deg,#6a7fdb,#2d3a8c)",
+      }}
+    >
+      {GUEST.name[0]}
+    </div>
+  );
+}
+
+// ─── Utility strip + main nav ─────────────────────────────────────────────────
+function UtilityBar() {
+  return (
+    <div className="hidden h-[39px] shrink-0 items-center justify-end gap-6 bg-[#00051f] px-5 text-[13px] font-medium text-white md:flex">
+      <span className="flex items-center gap-1.5">
+        <Search className="h-[18px] w-[18px]" strokeWidth={2.2} /> Search
+      </span>
+      <span>Support</span>
+      <span>1.888.799.9666</span>
+      <span className="h-4 w-px bg-white/30" />
+      <span>Contact Sales</span>
+      <span>Request a Demo</span>
+    </div>
+  );
+}
+
+function NavBar({
+  onMenu,
+  onHost,
+  onJoin,
+  onSchedule,
+}: {
+  onMenu: () => void;
+  onHost: () => void;
+  onJoin: () => void;
+  onSchedule: () => void;
+}) {
+  const link = "text-[15px] text-[#4a4f63] hover:text-[#0b5cff]";
+  const action = "flex items-center gap-0.5 text-[15px] font-semibold text-[#4a4f63] hover:text-[#0b5cff]";
+  return (
+    <header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b border-[#e8e9ee] bg-white px-3 sm:px-6">
+      <div className="flex items-center gap-8">
+        <button
+          onClick={onMenu}
+          aria-label="Open menu"
+          className="flex h-9 w-9 items-center justify-center rounded-lg text-[#4a4f63] hover:bg-portal-hover md:hidden"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+        <ZoomWordmark />
+        <nav className="hidden items-center gap-9 lg:flex">
+          <span className={link}>Products</span>
+          <span className={link}>Solutions</span>
+          <span className={link}>Resources</span>
+          <span className={link}>Plans &amp; Pricing</span>
+        </nav>
+      </div>
+      <div className="flex items-center gap-4 sm:gap-7">
+        <button onClick={onSchedule} className={`${action} hidden sm:flex`}>Schedule</button>
+        <button onClick={onJoin} className={`${action} hidden sm:flex`}>Join</button>
+        <button onClick={onHost} className={`${action} hidden sm:flex`}>
+          Host <ChevronDown className="h-4 w-4" />
+        </button>
+        <span className={`${action} hidden sm:flex`}>
+          Web App <ChevronDown className="h-4 w-4" />
+        </span>
+        <GuestAvatar size={32} />
+      </div>
+    </header>
+  );
+}
+
+// ─── Sidebar ──────────────────────────────────────────────────────────────────
+/** `tab` items switch the dashboard view; the rest are labels for now. */
+const PRODUCTS: { label: string; tab?: Tab; isNew?: boolean; external?: boolean }[] = [
+  { label: "AI", isNew: true, external: true },
+  { label: "Meetings", tab: "meetings" },
+  { label: "History", tab: "history" },
+  { label: "Recordings" },
+  { label: "Summaries" },
+  { label: "Hub", isNew: true, external: true },
+  { label: "Whiteboards", external: true },
+  { label: "Notes" },
+  { label: "Clips", external: true },
+  { label: "Canvas", external: true },
+  { label: "Paper", external: true },
+  { label: "Sheets", external: true },
+  { label: "Slides", external: true },
+  { label: "Tasks", external: true },
+  { label: "Scheduler", external: true },
+  { label: "Discover More Products" },
+];
 
 function Sidebar({
   active,
@@ -66,104 +169,74 @@ function Sidebar({
   open: boolean;
   onClose: () => void;
 }) {
-  const items: { id: Tab; icon: typeof Home; label: string }[] = [
-    { id: "home",     icon: Home,      label: "Home"     },
-    { id: "meetings", icon: AlignLeft, label: "Meetings" },
-    { id: "history",  icon: History,   label: "History"  },
-  ];
+  const row = "flex w-full items-center justify-between rounded-md px-3 py-[7px] text-left text-sm";
+  const go = (t: Tab) => {
+    onChange(t);
+    onClose();
+  };
 
   return (
     <>
-    {open && (
-      <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={onClose} aria-hidden="true" />
-    )}
-    <aside
-      aria-label="Main navigation"
-      className={`fixed inset-y-0 left-0 z-40 flex h-full w-[220px] shrink-0 flex-col border-r border-portal-border bg-portal-sidebar transition-transform duration-200 md:static md:z-auto md:translate-x-0 ${
-        open ? "translate-x-0" : "-translate-x-full"
-      }`}
-    >
-      {/* Logo */}
-      <div className="flex h-14 items-center gap-2.5 px-5 border-b border-portal-border">
-        <svg width="28" height="28" viewBox="0 0 40 40" fill="none">
-          <rect width="40" height="40" rx="8" fill="#0B5CFF"/>
-          <path d="M8 14.5C8 12.567 9.567 11 11.5 11h13C26.433 11 28 12.567 28 14.5v11C28 27.433 26.433 29 24.5 29h-13C9.567 29 8 27.433 8 25.5v-11Z" fill="white"/>
-          <path d="M29 16l6-4v16l-6-4V16Z" fill="white"/>
-        </svg>
-        <span className="text-[18px] font-semibold text-text-on-light tracking-tight">Zoom</span>
-      </div>
-
-      {/* Navigation */}
-      <nav className="flex-1 px-3 py-3 space-y-0.5">
-        {items.map(({ id, icon: Icon, label }) => (
-          <button
-            key={id}
-            onClick={() => {
-              onChange(id);
-              onClose();
-            }}
-            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
-              active === id
-                ? "bg-zoom-blue-light text-zoom-blue"
-                : "text-text-label hover:bg-portal-hover hover:text-text-on-light"
-            }`}
-          >
-            <Icon className="h-[18px] w-[18px] shrink-0" />
-            {label}
-          </button>
-        ))}
-      </nav>
-
-      {/* Bottom links */}
-      <div className="px-3 pb-4 space-y-0.5">
-        <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-text-label hover:bg-portal-hover hover:text-text-on-light">
-          <Settings className="h-[18px] w-[18px]" /> Settings
+      {open && (
+        <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={onClose} aria-hidden="true" />
+      )}
+      <aside
+        aria-label="Main navigation"
+        className={`fixed inset-y-0 left-0 z-40 flex h-full w-[300px] shrink-0 flex-col overflow-y-auto bg-[#f7f9fc] px-1.5 pb-6 pt-3 transition-transform duration-200 md:static md:z-auto md:translate-x-0 ${
+          open ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <button
+          onClick={() => go("home")}
+          className={`${row} ${active === "home" ? "bg-[#eaf1ff] text-[#0b5cff]" : "text-[#232333] hover:bg-portal-hover"}`}
+        >
+          Home
         </button>
-        <button className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-text-label hover:bg-portal-hover hover:text-text-on-light">
-          <HelpCircle className="h-[18px] w-[18px]" /> Help
-        </button>
-      </div>
-    </aside>
+
+        <p className="px-1.5 pb-2 pt-5 text-xs text-[#4a4f63]">My Products</p>
+        <div className="space-y-px">
+          {PRODUCTS.map(({ label, tab, isNew, external }) => {
+            const isActive = tab !== undefined && active === tab;
+            return (
+              <button
+                key={label}
+                onClick={tab ? () => go(tab) : undefined}
+                className={`${row} pl-6 ${
+                  isActive ? "bg-[#eaf1ff] text-[#0b5cff]" : "text-[#232333] hover:bg-portal-hover"
+                } ${tab ? "" : "cursor-default"}`}
+              >
+                {label}
+                <span className="flex items-center gap-2">
+                  {isNew && (
+                    <span className="rounded-full border border-[#0b5cff] bg-[#eaf1ff] px-1.5 text-[10px] font-semibold leading-4 text-[#0b5cff]">
+                      New
+                    </span>
+                  )}
+                  {external && <ExternalLink className="h-4 w-4 text-[#4a4f63]" />}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-5 space-y-px">
+          {["My Account", "Admin", "Support"].map((label) => (
+            <div
+              key={label}
+              className="flex cursor-default items-center gap-2 rounded-md px-1.5 py-[7px] text-sm text-[#232333]"
+            >
+              <ChevronRight className="h-3.5 w-3.5 text-[#4a4f63]" />
+              {label}
+            </div>
+          ))}
+        </div>
+      </aside>
     </>
   );
 }
 
-// ─── Top bar ──────────────────────────────────────────────────────────────────
-function TopBar({ onMenu }: { onMenu: () => void }) {
-  return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-portal-border bg-portal-sidebar px-3 sm:px-5">
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <button
-          onClick={onMenu}
-          aria-label="Open menu"
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-text-label hover:bg-portal-hover md:hidden"
-        >
-          <Menu className="h-5 w-5" />
-        </button>
-        <div className="relative w-full max-w-64">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-label" />
-          <input
-            type="text"
-            placeholder="Search"
-            className="w-full rounded-lg bg-portal-bg py-1.5 pl-9 pr-3 text-sm text-text-on-light placeholder:text-text-label outline-none focus:ring-1 focus:ring-zoom-blue"
-          />
-        </div>
-      </div>
-      <div className="flex shrink-0 items-center gap-3">
-        <button className="flex h-8 w-8 items-center justify-center rounded-full text-text-label hover:bg-portal-hover">
-          <Bell className="h-[18px] w-[18px]" />
-        </button>
-        {/* Default user avatar */}
-        <div className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-full bg-zoom-blue text-xs font-semibold text-white select-none">
-          AJ
-        </div>
-      </div>
-    </header>
-  );
-}
-
-// ─── Action Tiles (New Meeting / Join / Schedule) ─────────────────────────────
-function ActionTiles({
+// ─── Quick actions (Schedule / Join / Host) ───────────────────────────────────
+function QuickActions({
   onNewMeeting,
   onJoin,
   onSchedule,
@@ -174,41 +247,44 @@ function ActionTiles({
   onSchedule: () => void;
   starting: boolean;
 }) {
+  const tile = "flex h-[50px] w-[50px] items-center justify-center rounded-xl text-white";
+  const item = "flex w-[72px] flex-col items-center gap-2 disabled:opacity-60";
+  const label = "text-xs font-semibold text-[#4a4f63]";
   return (
-    <div className="grid max-w-[444px] grid-cols-3 gap-3">
-      <button
-        onClick={onNewMeeting}
-        disabled={starting}
-        className="flex flex-col items-center gap-2.5 rounded-2xl bg-portal-card p-4 sm:p-5 w-full shadow-sm border border-portal-border hover:shadow-md transition-shadow disabled:opacity-60"
-      >
-        <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[#ff6b35]">
-          <Video className="h-7 w-7 text-white" strokeWidth={2} />
+    <div className="flex items-start justify-center gap-6">
+      <button onClick={onSchedule} className={item}>
+        <span className={`${tile} relative bg-[#0e72ed]`}>
+          <Calendar className="h-6 w-6" strokeWidth={2} />
+          <span className="absolute top-[21px] text-[8px] font-bold leading-none">19</span>
         </span>
-        <span className="text-[13px] font-medium text-text-on-light">
-          {starting ? "Starting…" : "New Meeting"}
-        </span>
+        <span className={label}>Schedule</span>
       </button>
-
-      <button
-        onClick={onJoin}
-        className="flex flex-col items-center gap-2.5 rounded-2xl bg-portal-card p-4 sm:p-5 w-full shadow-sm border border-portal-border hover:shadow-md transition-shadow"
-      >
-        <span className="flex h-14 w-14 items-center justify-center rounded-full bg-zoom-blue">
-          <Plus className="h-7 w-7 text-white" strokeWidth={2.5} />
+      <button onClick={onJoin} className={item}>
+        <span className={`${tile} bg-[#0e72ed]`}>
+          <Plus className="h-6 w-6" strokeWidth={2.5} />
         </span>
-        <span className="text-[13px] font-medium text-text-on-light">Join</span>
+        <span className={label}>Join</span>
       </button>
-
-      <button
-        onClick={onSchedule}
-        className="flex flex-col items-center gap-2.5 rounded-2xl bg-portal-card p-4 sm:p-5 w-full shadow-sm border border-portal-border hover:shadow-md transition-shadow"
-      >
-        <span className="flex h-14 w-14 items-center justify-center rounded-full bg-zoom-blue">
-          <Calendar className="h-7 w-7 text-white" strokeWidth={1.8} />
+      <button onClick={onNewMeeting} disabled={starting} className={item}>
+        <span className={`${tile} bg-[#ff742e]`}>
+          <Video className="h-6 w-6" fill="currentColor" />
         </span>
-        <span className="text-[13px] font-medium text-text-on-light">Schedule</span>
+        <span className={label}>{starting ? "Starting…" : "Host"}</span>
       </button>
     </div>
+  );
+}
+
+/** Isometric open box shown when a list is empty. */
+function EmptyBox() {
+  return (
+    <svg width="150" height="100" viewBox="0 0 150 100" fill="none" aria-hidden="true">
+      <polygon points="75,8 132,28 75,48 18,28" fill="#cfe1ff" />
+      <polygon points="18,28 75,48 75,96 18,74" fill="#1a73e8" />
+      <polygon points="132,28 75,48 75,96 132,74" fill="#3b8cf7" />
+      <polygon points="18,28 44,18 75,36 52,44" fill="#e7f0ff" />
+      <polygon points="132,28 106,18 75,36 98,44" fill="#a8caff" />
+    </svg>
   );
 }
 
@@ -318,6 +394,14 @@ function RecentRow({ meeting }: { meeting: RecentMeeting }) {
 }
 
 // ─── Home Tab ─────────────────────────────────────────────────────────────────
+function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return (
+    <section className={`rounded-lg bg-white shadow-[0_1px_8px_rgba(20,30,70,0.10)] ${className}`}>
+      {children}
+    </section>
+  );
+}
+
 function HomeTab({
   upcoming,
   recent,
@@ -325,7 +409,7 @@ function HomeTab({
   onJoin,
   onSchedule,
   onStart,
-  onDelete,
+  onVisitMeetings,
   starting,
 }: {
   upcoming: Meeting[];
@@ -334,63 +418,102 @@ function HomeTab({
   onJoin: () => void;
   onSchedule: () => void;
   onStart: (id: string) => void;
-  onDelete: (id: string) => void;
+  onVisitMeetings: () => void;
   starting: boolean;
 }) {
-  const now = useClock();
-
-  const time = now?.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) ?? "";
-  const date = now?.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" }) ?? "";
-
   return (
-    <div className="space-y-8">
-      {/* Clock + actions */}
-      <div>
-        <div className="mb-6">
-          <p className="text-sm text-text-label">{date}</p>
-          <p className="text-5xl font-light tabular-nums text-text-on-light">{time}</p>
-        </div>
-        <ActionTiles
-          onNewMeeting={onNewMeeting}
-          onJoin={onJoin}
-          onSchedule={onSchedule}
-          starting={starting}
-        />
+    <div className="mx-auto flex max-w-[1080px] flex-col gap-6 lg:flex-row lg:items-start">
+      {/* Left column: profile + recent activity */}
+      <div className="flex min-w-0 flex-1 flex-col gap-6">
+        <Card className="flex flex-wrap items-start justify-between gap-4 p-6">
+          <div className="flex items-center gap-4">
+            <GuestAvatar size={80} />
+            <div>
+              <h1 className="text-[26px] font-semibold leading-tight text-[#0e0e1a]">{GUEST.name}</h1>
+              <p className="text-sm text-[#4a4f63]">
+                Plan: <span className="font-medium text-[#0e0e1a]">{GUEST.plan}</span>
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-col items-end gap-4">
+            <span className="cursor-default rounded-full bg-[#eef2fb] px-5 py-1.5 text-[13px] text-[#0b5cff]">
+              Manage Plan
+            </span>
+            <span className="cursor-default text-[13px] text-[#0b5cff]">View Plan Details</span>
+          </div>
+        </Card>
+
+        <Card className="p-6">
+          <h2 className="border-b border-[#e8e9ee] pb-4 text-2xl font-semibold text-[#0e0e1a]">
+            Recent activity
+          </h2>
+          {recent.length === 0 ? (
+            <div className="flex flex-col items-center gap-9 pb-14 pt-12">
+              <EmptyBox />
+              <p className="text-[15px] font-semibold text-[#0e0e1a]">No recent activity</p>
+            </div>
+          ) : (
+            <div className="space-y-2 pt-4">
+              {recent.slice(0, 5).map((r) => (
+                <RecentRow key={r.id} meeting={r} />
+              ))}
+            </div>
+          )}
+        </Card>
       </div>
 
-      {/* Upcoming today/soon */}
-      {upcoming.length > 0 && (
-        <section>
-          <h2 className="mb-3 text-[13px] font-semibold uppercase tracking-wide text-text-label">
-            Upcoming Meetings
-          </h2>
-          <div className="space-y-2">
-            {upcoming.slice(0, 3).map(m => (
-              <UpcomingCard
-                key={m.id}
-                meeting={m}
-                onStart={() => onStart(m.id)}
-                onCopyLink={() => copyText(`${window.location.origin}/meeting/${m.id}`)}
-                onDelete={() => onDelete(m.id)}
-              />
-            ))}
-          </div>
-        </section>
-      )}
+      {/* Right column: quick actions + meetings */}
+      <div className="flex w-full flex-col gap-6 lg:w-[328px] lg:shrink-0">
+        <Card className="px-4 py-6">
+          <QuickActions
+            onNewMeeting={onNewMeeting}
+            onJoin={onJoin}
+            onSchedule={onSchedule}
+            starting={starting}
+          />
+        </Card>
 
-      {/* Recent */}
-      {recent.length > 0 && (
-        <section>
-          <h2 className="mb-3 text-[13px] font-semibold uppercase tracking-wide text-text-label">
-            Recent Meetings
-          </h2>
-          <div className="space-y-2">
-            {recent.slice(0, 3).map(r => (
-              <RecentRow key={r.id} meeting={r} />
-            ))}
+        <Card className="p-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-2xl font-semibold text-[#0e0e1a]">Meetings</h2>
+            <button onClick={onVisitMeetings} className="text-[13px] text-[#0b5cff] hover:underline">
+              Visit Meetings
+            </button>
           </div>
-        </section>
-      )}
+          {upcoming.length === 0 ? (
+            <>
+              <p className="mt-5 rounded-lg bg-[#f7f9fc] px-2 py-3 text-[15px] font-semibold text-[#0e0e1a]">
+                No Upcoming Meetings
+              </p>
+              <div className="mt-4 flex justify-center">
+                <span className="cursor-default rounded-full bg-[#eef2fb] px-4 py-1.5 text-[13px] text-[#0b5cff]">
+                  Test Audio and Video
+                </span>
+              </div>
+            </>
+          ) : (
+            <ul className="mt-4 space-y-2">
+              {upcoming.slice(0, 3).map((m) => (
+                <li
+                  key={m.id}
+                  className="flex items-center justify-between gap-2 rounded-lg bg-[#f7f9fc] px-3 py-2.5"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-[#0e0e1a]">{m.title}</p>
+                    <p className="text-xs text-[#4a4f63]">{formatMeetingTime(m.scheduled_at!)}</p>
+                  </div>
+                  <button
+                    onClick={() => onStart(m.id)}
+                    className="shrink-0 rounded-full bg-[#0e72ed] px-4 py-1 text-xs font-semibold text-white hover:bg-[#0b5cff]"
+                  >
+                    Start
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
     </div>
   );
 }
@@ -534,39 +657,60 @@ export default function DashboardPage() {
     showToast("Meeting deleted.");
   }
 
+  const goJoin = () => router.push("/join");
+  const goSchedule = () => router.push("/schedule");
+
   return (
-    <div className="flex h-screen bg-portal-bg">
-      <Sidebar active={tab} onChange={setTab} open={menuOpen} onClose={() => setMenuOpen(false)} />
+    <div className="flex h-screen flex-col bg-white">
+      <UtilityBar />
+      <NavBar
+        onMenu={() => setMenuOpen(true)}
+        onHost={handleNewMeeting}
+        onJoin={goJoin}
+        onSchedule={goSchedule}
+      />
 
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <TopBar onMenu={() => setMenuOpen(true)} />
+      <div className="flex min-h-0 flex-1">
+        <Sidebar active={tab} onChange={setTab} open={menuOpen} onClose={() => setMenuOpen(false)} />
 
-        <main className="flex-1 overflow-y-auto px-4 py-5 sm:px-8 sm:py-6">
-          <div className="mx-auto max-w-2xl">
-            {tab === "home" && (
-              <HomeTab
-                upcoming={upcoming}
-                recent={recent}
-                onNewMeeting={handleNewMeeting}
-                onJoin={() => router.push("/join")}
-                onSchedule={() => router.push("/schedule")}
-                onStart={id => router.push(`/meeting/${id}`)}
-                onDelete={handleDelete}
-                starting={starting}
-              />
-            )}
-            {tab === "meetings" && (
+        <main className="min-w-0 flex-1 overflow-y-auto bg-white px-4 py-6 sm:px-8 md:py-9">
+          {tab === "home" && (
+            <HomeTab
+              upcoming={upcoming}
+              recent={recent}
+              onNewMeeting={handleNewMeeting}
+              onJoin={goJoin}
+              onSchedule={goSchedule}
+              onStart={(id) => router.push(`/meeting/${id}`)}
+              onVisitMeetings={() => setTab("meetings")}
+              starting={starting}
+            />
+          )}
+          {tab === "meetings" && (
+            <div className="mx-auto max-w-2xl">
               <MeetingsTab
                 upcoming={upcoming}
-                onStart={id => router.push(`/meeting/${id}`)}
+                onStart={(id) => router.push(`/meeting/${id}`)}
                 onDelete={handleDelete}
-                onSchedule={() => router.push("/schedule")}
+                onSchedule={goSchedule}
               />
-            )}
-            {tab === "history" && <HistoryTab recent={recent} />}
-          </div>
+            </div>
+          )}
+          {tab === "history" && (
+            <div className="mx-auto max-w-2xl">
+              <HistoryTab recent={recent} />
+            </div>
+          )}
         </main>
       </div>
+
+      {/* Support chat launcher (visual only for now) */}
+      <button
+        aria-label="Chat with support"
+        className="fixed bottom-4 right-4 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-[#0e72ed] text-white shadow-lg hover:bg-[#0b5cff]"
+      >
+        <MessageCircle className="h-7 w-7" fill="currentColor" />
+      </button>
 
       {toast && <Toast msg={toast} onDismiss={() => setToast(null)} />}
     </div>
