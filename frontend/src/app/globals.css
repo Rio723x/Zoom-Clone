@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+/*  Zoom Workplace design tokens -- accurate approximations of the real client */
+@theme {
+  /* Brand */
+  --color-zoom-blue:        #0B5CFF;
+  --color-zoom-blue-hover:  #0950e8;
+  --color-zoom-blue-light:  #e8f0ff;
+  --color-zoom-blue-pressed:#0845d0;
+
+  /* Meeting stage (dark) */
+  --color-stage:            #1c1c1c;
+  --color-stage-2:          #242424;
+  --color-tile:             #2c2c2c;
+  --color-tile-2:           #333333;
+  --color-controlbar:       #1c1c1c;
+  --color-panel:            #2c2c2c;
+  --color-panel-2:          #333333;
+  --color-panel-border:     #404040;
+  --color-hover:            #3a3a3a;
+
+  /* Status */
+  --color-leave:            #e02b20;
+  --color-leave-hover:      #c92318;
+  --color-share-green:      #4caf50;
+  --color-active-speaker:   #00c3b4;
+  --color-raise-hand:       #f5c518;
+  --color-success:          #00b09c;
+
+  /* Text */
+  --color-text-primary:     #f0f0f0;
+  --color-text-secondary:   #a0a0a0;
+  --color-text-muted:       #707070;
+  --color-text-on-light:    #1a1a2e;
+  --color-text-label:       #5a5a72;
+
+  /* Portal (dashboard / light surfaces) */
+  --color-portal-bg:        #f7f8fa;
+  --color-portal-sidebar:   #ffffff;
+  --color-portal-card:      #ffffff;
+  --color-portal-border:    #e8e8ee;
+  --color-portal-hover:     #f0f1f5;
+  --color-portal-active:    #e8f0ff;
+  --color-portal-active-text:#0b5cff;
+
+  /* Radii */
+  --radius-tile:   8px;
+  --radius-panel:  12px;
+  --radius-button: 8px;
+
+  /* Font */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  /* Layout */
+  --spacing-sidebar-w:       240px;
+  --spacing-panel-width:     340px;
+  --spacing-controlbar-h:    80px;
+  --spacing-topbar-h:        56px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; }
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--color-portal-bg);
+  color: var(--color-text-on-light);
+}
