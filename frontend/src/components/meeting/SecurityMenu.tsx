@@ -1,6 +1,6 @@
 import { Check, Lock } from "lucide-react";
 import { cn } from "@/lib/cn";
-import type { Permission } from "@/store/useMeetingControlsStore";
+import type { Permission } from "@/lib/controls";
 
 interface SecurityMenuProps {
   locked: boolean;

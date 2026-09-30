@@ -1,39 +1,48 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
-import PreJoin from "@/components/meeting/PreJoin";
-import RealMeeting from "@/components/meeting/RealMeeting";
 import dynamic from "next/dynamic";
-const LiveMeeting = dynamic(() => import("@/components/meeting/LiveMeeting"), { ssr: false });
-import { hasToken } from "@/lib/videosdk/token";
-import { useUserStore } from "@/store/useUserStore";
+import { useParams, useRouter } from "next/navigation";
+import PreJoin from "@/components/meeting/PreJoin";
+import { api, apiErrorMessage, isNotFound } from "@/lib/api";
+import { getHostToken, removeHostToken } from "@/lib/hostTokens";
+import type { JoinResult } from "@/lib/types";
 import { useSessionStore } from "@/store/useSessionStore";
-import axios from "axios";
+import { useUserStore } from "@/store/useUserStore";
 
-const API_BASE = "http://localhost:8000/api";
+// The video SDK touches browser-only APIs, so the meeting itself never renders on the server.
+const MeetingSession = dynamic(() => import("@/components/meeting/MeetingSession"), {
+  ssr: false,
+});
+
+interface ActiveSession {
+  join: JoinResult;
+  name: string;
+  micOn: boolean;
+  webcamOn: boolean;
+}
+
+const STALE_HOST_TOKEN = "Invalid host token";
 
 export default function MeetingPage() {
   const params = useParams();
-  const roomId = typeof params.id === "string" ? params.id : "000-000-000";
+  const meetingId = typeof params.id === "string" ? params.id : "";
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const setDisplayName = useUserStore((s) => s.setDisplayName);
 
-  const { displayName, setDisplayName } = useUserStore();
+  const [session, setSession] = useState<ActiveSession | null>(null);
+  const [missing, setMissing] = useState(false);
 
+  // Fail early on a bad link instead of after the user has set up their camera.
   useEffect(() => {
-    if (searchParams?.get("role") === "host") {
-      useSessionStore.getState().setRole("host");
-    }
-  }, [searchParams]);
-
-  const [joined, setJoined] = useState(false);
-  const [micOn, setMicOn] = useState(true);
-  const [webcamOn, setWebcamOn] = useState(true);
-  const [resolvedName, setResolvedName] = useState("");
-
-  // Only use VideoSDK live rooms when a token is properly configured
-  const isLive = hasToken() && !roomId.startsWith("demo-");
+    let cancelled = false;
+    api.getMeeting(meetingId).catch((err) => {
+      if (!cancelled && isNotFound(err)) setMissing(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [meetingId]);
 
   function leave(reason?: string) {
     if (reason) sessionStorage.setItem("zoom_toast", reason);
@@ -41,51 +50,57 @@ export default function MeetingPage() {
   }
 
   async function handleJoin(opts: { micOn: boolean; webcamOn: boolean; name: string }) {
-    const name = opts.name.trim() || displayName || "Guest";
-
-    // Persist chosen name
+    const name = opts.name.trim();
     setDisplayName(name);
-    setResolvedName(name);
-    setMicOn(opts.micOn);
-    setWebcamOn(opts.webcamOn);
 
-    // Validate meeting exists in our backend
+    let join: JoinResult;
     try {
-      await axios.get(`${API_BASE}/meetings/${roomId}`);
-    } catch {
-      // If meeting doesn't exist in our DB, that's OK for instant rooms
-      // that were created outside the normal flow (e.g. direct URL).
-      // We still let them in — they just won't have a record.
+      join = await api.joinMeeting(meetingId, name, getHostToken(meetingId));
+    } catch (err) {
+      if (apiErrorMessage(err, "") !== STALE_HOST_TOKEN) {
+        throw new Error(apiErrorMessage(err, "Unable to join the meeting."));
+      }
+      // The saved host token no longer matches (e.g. the meeting was recreated): join as a guest.
+      removeHostToken(meetingId);
+      try {
+        join = await api.joinMeeting(meetingId, name, null);
+      } catch (retryErr) {
+        throw new Error(apiErrorMessage(retryErr, "Unable to join the meeting."));
+      }
     }
 
-    setJoined(true);
+    useSessionStore.getState().setRole(join.role === "host" ? "host" : "participant");
+    setSession({ join, name, micOn: opts.micOn, webcamOn: opts.webcamOn });
   }
 
-  if (!joined) {
-    return <PreJoin onJoin={handleJoin} />;
-  }
-
-  // Live multi-user mode (requires VideoSDK token in .env.local)
-  if (isLive) {
+  if (missing) {
     return (
-      <LiveMeeting
-        key={roomId}
-        roomId={roomId}
-        name={resolvedName || displayName}
-        micOn={micOn}
-        webcamOn={webcamOn}
-        onLeave={leave}
-      />
+      <div className="flex h-screen w-screen flex-col items-center justify-center gap-4 bg-stage px-4 text-center text-text-primary">
+        <h1 className="text-xl font-semibold">Meeting not found</h1>
+        <p className="text-sm text-text-secondary">
+          Check the meeting ID or link ({meetingId}) and try again.
+        </p>
+        <button
+          onClick={() => router.push("/")}
+          className="rounded-md bg-zoom-blue px-6 py-2 text-sm font-medium text-white hover:bg-zoom-blue-hover"
+        >
+          Back to Home
+        </button>
+      </div>
     );
   }
 
-  // Real local meeting using your actual camera + mic (no fake participants)
+  if (!session) {
+    return <PreJoin onJoin={handleJoin} />;
+  }
+
   return (
-    <RealMeeting
-      roomId={roomId}
-      displayName={resolvedName || displayName || "Guest"}
-      initialMicOn={micOn}
-      initialWebcamOn={webcamOn}
+    <MeetingSession
+      key={meetingId}
+      join={session.join}
+      name={session.name}
+      micOn={session.micOn}
+      webcamOn={session.webcamOn}
       onLeave={leave}
     />
   );

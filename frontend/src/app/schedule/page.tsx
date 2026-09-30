@@ -2,10 +2,9 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, Copy, Check } from "lucide-react";
-import axios from "axios";
-
-const API_BASE = "http://localhost:8000/api";
+import { Copy, Check } from "lucide-react";
+import { api, apiErrorMessage } from "@/lib/api";
+import { saveHostToken } from "@/lib/hostTokens";
 
 const DURATION_OPTIONS = [
   { value: 15,  label: "15 minutes" },
@@ -17,10 +16,16 @@ const DURATION_OPTIONS = [
   { value: 180, label: "3 hours" },
 ];
 
+/** yyyy-mm-dd in the user's local timezone (toISOString would give the UTC date). */
+function localDateString(d: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 function getTomorrow() {
   const d = new Date();
   d.setDate(d.getDate() + 1);
-  return d.toISOString().split("T")[0];
+  return localDateString(d);
 }
 
 export default function SchedulePage() {
@@ -31,23 +36,34 @@ export default function SchedulePage() {
   const [time, setTime] = useState("10:00");
   const [duration, setDuration] = useState(60);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const [scheduled, setScheduled] = useState<{ id: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
   async function handleSchedule(e: React.FormEvent) {
     e.preventDefault();
+    setError("");
+
+    // Local date + time -> an absolute instant (sent as UTC; the server stores UTC).
+    const startsAt = new Date(`${date}T${time}`);
+    if (Number.isNaN(startsAt.getTime()) || startsAt.getTime() <= Date.now()) {
+      setError("Pick a date and time in the future.");
+      return;
+    }
+
     setLoading(true);
     try {
-      const scheduledAt = new Date(`${date}T${time}`).toISOString();
-      const res = await axios.post(`${API_BASE}/meetings/schedule`, {
+      const meeting = await api.scheduleMeeting({
         title: title.trim(),
         description: description.trim() || null,
-        scheduled_at: scheduledAt,
+        scheduled_at: startsAt.toISOString(),
         duration,
       });
-      setScheduled(res.data);
-    } catch {
-      // silent
+      // Lets this browser start the meeting later as its host.
+      saveHostToken(meeting.id, meeting.host_token);
+      setScheduled(meeting);
+    } catch (err) {
+      setError(apiErrorMessage(err, "Couldn't schedule the meeting. Please try again."));
     } finally {
       setLoading(false);
     }
@@ -147,7 +163,7 @@ export default function SchedulePage() {
                   type="date"
                   value={date}
                   onChange={e => setDate(e.target.value)}
-                  min={new Date().toISOString().split("T")[0]}
+                  min={localDateString(new Date())}
                   className="w-full rounded-lg border border-portal-border bg-portal-bg px-3.5 py-2.5 text-sm text-text-on-light outline-none focus:border-zoom-blue focus:ring-1 focus:ring-zoom-blue"
                   required
                 />
@@ -176,6 +192,12 @@ export default function SchedulePage() {
                 ))}
               </select>
             </div>
+
+            {error && (
+              <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">
+                {error}
+              </p>
+            )}
 
             <div className="flex gap-3 pt-1">
               <button

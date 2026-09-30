@@ -2,31 +2,43 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Video, ChevronLeft, Copy, Check } from "lucide-react";
-import axios from "axios";
-
-const API_BASE = "http://localhost:8000/api";
+import { ChevronLeft } from "lucide-react";
+import { api, apiErrorMessage, isNotFound } from "@/lib/api";
+import { parseMeetingId } from "@/lib/meetingId";
+import { useUserStore } from "@/store/useUserStore";
 
 export default function JoinPage() {
   const router = useRouter();
+  const savedName = useUserStore((s) => s.displayName);
+  const saveName = useUserStore((s) => s.setDisplayName);
   const [meetingId, setMeetingId] = useState("");
-  const [displayName, setDisplayName] = useState("");
+  const [displayName, setDisplayName] = useState(savedName);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function handleJoin(e: React.FormEvent) {
     e.preventDefault();
-    const trimId = meetingId.trim();
-    if (!trimId || !displayName.trim()) return;
+    const name = displayName.trim();
+    if (!meetingId.trim() || !name) return;
+
+    const id = parseMeetingId(meetingId);
+    if (!id) {
+      setError("Enter a valid Meeting ID (like 123-456-789) or an invite link.");
+      return;
+    }
+
     setLoading(true);
     setError("");
-
     try {
-      await axios.get(`${API_BASE}/meetings/${trimId}`);
-      sessionStorage.setItem("zoom_display_name", displayName.trim());
-      router.push(`/meeting/${trimId}`);
-    } catch {
-      setError("Meeting not found. Check the ID and try again.");
+      await api.getMeeting(id);
+      saveName(name);
+      router.push(`/meeting/${id}`);
+    } catch (err) {
+      setError(
+        isNotFound(err)
+          ? "Meeting not found. Check the ID and try again."
+          : apiErrorMessage(err, "Couldn't check that meeting. Try again."),
+      );
       setLoading(false);
     }
   }
@@ -58,7 +70,7 @@ export default function JoinPage() {
                 type="text"
                 value={meetingId}
                 onChange={e => setMeetingId(e.target.value)}
-                placeholder="Enter Meeting ID"
+                placeholder="Enter Meeting ID or paste invite link"
                 className="w-full rounded-lg border border-portal-border bg-portal-bg px-3.5 py-2.5 text-sm text-text-on-light placeholder:text-text-label outline-none focus:border-zoom-blue focus:ring-1 focus:ring-zoom-blue"
                 required
               />

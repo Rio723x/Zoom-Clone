@@ -38,7 +38,7 @@ export default function ParticipantsPanel({
   const [copied, setCopied] = useState(false);
 
   const copyInviteLink = async () => {
-    // Guest join link: current meeting URL without the ?role=host deep-link.
+    // Guest invite link: the meeting URL itself (host status comes from the host token, not the URL).
     const link = window.location.origin + window.location.pathname;
     try {
       await navigator.clipboard.writeText(link);

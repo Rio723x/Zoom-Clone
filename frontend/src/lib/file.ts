@@ -43,16 +43,3 @@ export function formatBytes(n: number): string {
   const mb = kb / 1024;
   return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
 }
-
-/** Upload a file as base64 to the remote storage endpoint. */
-export async function uploadFile(file: File, token: string): Promise<string> {
-  const base64 = await fileToBase64(file);
-  const res = await fetch("https://api.videosdk.live/v2/files", {
-    method: "POST",
-    headers: { authorization: token, "Content-Type": "application/json" },
-    body: JSON.stringify({ base64, name: file.name, type: file.type }),
-  });
-  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
-  const data = await res.json() as { fileUrl: string };
-  return data.fileUrl;
-}

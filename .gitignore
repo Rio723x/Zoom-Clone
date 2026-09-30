@@ -69,3 +69,7 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Local virtualenv
+backend/myenv/
+.pytest_cache/

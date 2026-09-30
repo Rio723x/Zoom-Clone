@@ -1,7 +1,6 @@
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState, type RefObject } from "react";
 import {
   useMeeting,
-  usePubSub,
   useWhiteboard,
   useFile,
   VideoPlayer,
@@ -16,7 +15,7 @@ import LiveParticipantRowActions from "./LiveParticipantRowActions";
 import MicEnforcer from "./MicEnforcer";
 import RecordingIndicator from "./RecordingIndicator";
 import FloatingReactions, { type FloatingReaction } from "./FloatingReactions";
-import { useLivePolls } from "./useLivePolls";
+import { useServerPolls } from "./useServerPolls";
 import { useMeetingHotkeys } from "./useMeetingHotkeys";
 import type { PanelType } from "./types";
 import ParticipantsPanel from "@/components/panels/ParticipantsPanel";
@@ -25,18 +24,28 @@ import ChatPanel, {
   type ChatAttachment,
 } from "@/components/panels/ChatPanel";
 import PollsPanel from "@/components/panels/PollsPanel";
+import type { MeetingSocket, TransientHandlers } from "@/hooks/useMeetingSocket";
+import { api } from "@/lib/api";
+import { PERMISSION_FIELD, toControlsView, type Permission } from "@/lib/controls";
+import { getHostToken } from "@/lib/hostTokens";
 import { colorForId, type ParticipantVM } from "@/lib/participantVM";
-import { VIDEOSDK_TOKEN } from "@/lib/videosdk/token";
 import { fileToBase64, base64ToObjectUrl, triggerDownload } from "@/lib/file";
+import type { MeetingControls } from "@/lib/types";
 import { useSessionStore } from "@/store/useSessionStore";
-import { useMeetingControlsStore } from "@/store/useMeetingControlsStore";
 import { useSettingsStore } from "@/store/useSettingsStore";
-import WaitingRoom from "./WaitingRoom";
 import { useGalleryTileSize } from "./useGalleryTileSize";
 import { usePictureInPicture } from "./usePictureInPicture";
 
-const LOCKED_MSG = "This meeting is locked by the host.";
-const REMOVED_MSG = "You were removed from the meeting by the host.";
+const DISCONNECTED_MSG = "You were disconnected from the meeting.";
+const NOTICE_MS = 4000;
+
+/** Friendly text for error codes the server sends back over the socket. */
+const ERROR_NOTICES: Record<string, string> = {
+  "chat-disabled": "The host has turned off chat.",
+  forbidden: "Only the host can do that.",
+  "vote-rejected": "That poll is closed.",
+  "invalid-message": "That couldn't be sent. Try a shorter message.",
+};
 
 // A failed screen-share (user cancelled the picker, denied permission, or the
 // browser can't share -- e.g. most mobile browsers) is never fatal to the
@@ -73,20 +82,26 @@ function useElapsed(): string {
 }
 
 interface LiveMeetingViewProps {
-  roomId: string;
-  /** Pre-join media intent, restored when a waiting guest is admitted. */
-  initialMicOn: boolean;
-  initialWebcamOn: boolean;
+  /** Our meeting id (shown in the top bar and used for host actions). */
+  meetingId: string;
+  /** Participant-scoped media token, also used for chat file storage. */
+  mediaToken: string;
+  /** Realtime room state and sender, owned by MeetingSession. */
+  socket: MeetingSocket;
+  /** Where this view registers its handlers for transient socket events. */
+  handlersRef: RefObject<TransientHandlers>;
   /** Navigate away; an optional reason surfaces as a toast on Home. */
   onLeave: (reason?: string) => void;
 }
 
 export default function LiveMeetingView({
-  roomId,
-  initialMicOn,
-  initialWebcamOn,
+  meetingId,
+  mediaToken,
+  socket,
+  handlersRef,
   onLeave,
 }: LiveMeetingViewProps) {
+  const { room, send } = socket;
   const role = useSessionStore((s) => s.role);
   const isHost = role === "host";
   const elapsed = useElapsed();
@@ -94,6 +109,7 @@ export default function LiveMeetingView({
   const [activePanel, setActivePanel] = useState<PanelType>(null);
   const [view, setView] = useState<"gallery" | "speaker">("gallery");
   const [joinError, setJoinError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [recordingStatus, setRecordingStatus] =
     useState<RecordingStatus>("RECORDING_STOPPED");
 
@@ -101,23 +117,8 @@ export default function LiveMeetingView({
   // reflect in the UI when the roster changes.
   const [, bump] = useReducer((n: number) => n + 1, 0);
 
-  // --- State/refs the useMeeting callbacks close over (declared first) ---
-  // Host-owned authoritative set of participant ids currently held in the
-  // waiting room. Broadcast idempotently over WAITING_SET; guests mirror it.
-  const [waitingSet, setWaitingSet] = useState<string[]>([]);
-  const admittedIds = useRef<Set<string>>(new Set());
   // Distinguishes a real Leave click (self-leave) from an involuntary removal.
   const intentionalLeave = useRef(false);
-  // Reason string received (targeted) just before the host removes us.
-  const [bounceReason, setBounceReason] = useState<string | null>(null);
-  const bounceReasonRef = useRef<string | null>(null);
-  bounceReasonRef.current = bounceReason;
-  // publish fns assigned after their usePubSub calls, read from callbacks.
-  type PublishFn = (
-    msg: string,
-    opts: { persist: boolean; sendOnly?: string[] },
-  ) => unknown;
-  const publishBounceRef = useRef<PublishFn | null>(null);
 
   const {
     participants,
@@ -144,51 +145,11 @@ export default function LiveMeetingView({
         onLeave();
         return;
       }
-      // Involuntary removal. Prefer the targeted reason message, but fall back
-      // to the synced lock state so a locked-out guest still learns why even if
-      // the (best-effort) BOUNCE message lost the race with removal.
-      const reason =
-        bounceReasonRef.current ??
-        (useMeetingControlsStore.getState().locked ? LOCKED_MSG : REMOVED_MSG);
-      onLeave(reason);
+      // Involuntary exit (removed, or the media room closed). The realtime socket
+      // normally explains why a moment earlier; the session ignores this call if so.
+      setTimeout(() => onLeave(DISCONNECTED_MSG), 1000);
     },
-    onParticipantJoined: (p) => {
-      bump();
-      // Host-authoritative Lock + Waiting Room enforcement on new joiners only.
-      // Existing participants and the host never re-fire their own join, so
-      // locking / enabling WR mid-meeting cannot affect people already in.
-      if (useSessionStore.getState().role !== "host") return;
-      const st = useMeetingControlsStore.getState();
-      if (st.locked) {
-        // Silence them instantly (no media leak), then remove after a beat so
-        // the targeted reason message reliably lands before they disconnect.
-        try {
-          p.disableMic();
-          p.disableWebcam();
-        } catch {
-          /* ignore */
-        }
-        publishBounceRef.current?.(LOCKED_MSG, { sendOnly: [p.id], persist: false });
-        setTimeout(() => {
-          try {
-            p.remove();
-          } catch {
-            /* already gone */
-          }
-        }, 600);
-        return;
-      }
-      if (st.waitingRoomEnabled && !admittedIds.current.has(p.id)) {
-        // Force media off so no stream leaks to anyone while they wait.
-        try {
-          p.disableMic();
-          p.disableWebcam();
-        } catch {
-          /* ignore */
-        }
-        setWaitingSet((prev) => (prev.includes(p.id) ? prev : [...prev, p.id]));
-      }
-    },
+    onParticipantJoined: () => bump(),
     onParticipantLeft: () => bump(),
     onError: (e: { code: string; message: string }) => {
       // Cancelling/denying/failing a screen-share is a normal user action, not a
@@ -199,21 +160,55 @@ export default function LiveMeetingView({
     },
   });
 
-  // Reset host controls on mount so a lock/permission from a prior meeting (or
-  // from Demo mode) doesn't leak in via the shared singleton store.
-  useEffect(() => {
-    useMeetingControlsStore.getState().reset();
-  }, [roomId]);
+  // Host-managed settings come from the server, so late joiners and reconnects agree.
+  const controls = toControlsView(room.controls);
+  const localId = localParticipant?.id ?? "";
+  const rosterById = new Map(room.participants.map((p) => [String(p.id), p]));
 
-  // --- Chat (persisted so late joiners get history) ---
+  // --- Reactions (transient, floating emoji) and server error notices ---
+  const [floating, setFloating] = useState<FloatingReaction[]>([]);
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => {
+    handlersRef.current = {
+      onReaction: (participantId, emoji) => {
+        const id = `${participantId}-${Date.now()}-${Math.random()}`;
+        setFloating((prev) => [
+          ...prev,
+          { id, emoji, left: 10 + Math.floor(Math.random() * 80) },
+        ]);
+        setTimeout(() => setFloating((prev) => prev.filter((r) => r.id !== id)), 3000);
+      },
+      onError: (code) => {
+        setNotice(ERROR_NOTICES[code] ?? "Something went wrong.");
+        clearTimeout(noticeTimer.current);
+        noticeTimer.current = setTimeout(() => setNotice(null), NOTICE_MS);
+      },
+    };
+    return () => {
+      handlersRef.current = {};
+      clearTimeout(noticeTimer.current);
+    };
+  }, [handlersRef]);
+  const sendReaction = (emoji: string) => {
+    send({ type: "reaction", emoji });
+  };
+
+  // --- Raise hand (server-tracked per participant) ---
+  const raisedHands = new Set(
+    room.participants.filter((p) => p.hand_raised).map((p) => String(p.id)),
+  );
+  const raiseHand = () => {
+    send({ type: "raise-hand", raised: !raisedHands.has(localId) });
+  };
+
+  // --- Chat (persisted server-side; late joiners receive the history) ---
   const { uploadBase64File, fetchBase64File } = useFile();
-  const { publish: publishChat, messages: chatMessages } = usePubSub("CHAT");
-  const chatVMs: ChatMessageVM[] = chatMessages.map((m) => {
-    // Payload is JSON { text, files? }; tolerate a bare-string legacy message.
-    let text = m.message;
+  const chatVMs: ChatMessageVM[] = room.messages.map((m) => {
+    // Payload is JSON { text, files? }; tolerate a bare-string message.
+    let text = m.text;
     let files: ChatAttachment[] | undefined;
     try {
-      const parsed = JSON.parse(m.message);
+      const parsed = JSON.parse(m.text);
       if (parsed && typeof parsed === "object") {
         text = typeof parsed.text === "string" ? parsed.text : "";
         files = Array.isArray(parsed.files) ? parsed.files : undefined;
@@ -222,54 +217,18 @@ export default function LiveMeetingView({
       /* not JSON -- treat as plain text */
     }
     return {
-      id: m.id,
-      senderName: m.senderName,
+      id: String(m.id),
+      senderName: m.sender_name,
       toName: "Everyone",
       message: text,
-      timestamp: fmtTime(m.timestamp),
-      isLocal: m.senderId === localParticipant?.id,
+      timestamp: fmtTime(m.sent_at),
+      isLocal: m.participant_id === Number(localId),
       files,
     };
   });
 
-  // --- Reactions (transient, floating emoji) ---
-  const [floating, setFloating] = useState<FloatingReaction[]>([]);
-  const { publish: publishReaction } = usePubSub("REACTIONS", {
-    onMessageReceived: (m) => {
-      const id = `${m.id}`;
-      setFloating((prev) => [
-        ...prev,
-        { id, emoji: m.message, left: 10 + Math.floor(Math.random() * 80) },
-      ]);
-      setTimeout(
-        () => setFloating((prev) => prev.filter((r) => r.id !== id)),
-        3000,
-      );
-    },
-  });
-  const sendReaction = (emoji: string) => {
-    publishReaction(emoji, { persist: false });
-  };
-
-  // --- Raise hand (transient toggle, tracked per participant) ---
-  const [raisedHands, setRaisedHands] = useState<Set<string>>(new Set());
-  const { publish: publishHand } = usePubSub("RAISE_HAND", {
-    onMessageReceived: (m) => {
-      setRaisedHands((prev) => {
-        const next = new Set(prev);
-        if (m.message === "LOWER") next.delete(m.senderId);
-        else next.add(m.senderId);
-        return next;
-      });
-    },
-  });
-  const raiseHand = () => {
-    const raised = raisedHands.has(localParticipant?.id ?? "");
-    publishHand(raised ? "LOWER" : "RAISE", { persist: false });
-  };
-
-  // --- Polls (app-side over pubsub) ---
-  const polls = useLivePolls(localParticipant?.id);
+  // --- Polls (server-held) ---
+  const polls = useServerPolls(socket);
 
   // --- Whiteboard (native VideoSDK, shared via URL) ---
   const { startWhiteboard, stopWhiteboard, whiteboardUrl } = useWhiteboard();
@@ -280,123 +239,7 @@ export default function LiveMeetingView({
 
   // Derived each render (the Map reference is stable, so no memo).
   const participantIds = [...participants.keys()];
-
-  // --- Host meeting controls (Security menu) broadcast via HOST_CONTROL ---
-  const controls = useMeetingControlsStore();
-  const controlsSnapshot = {
-    locked: controls.locked,
-    waitingRoomEnabled: controls.waitingRoomEnabled,
-    permissions: controls.permissions,
-  };
-  const { publish: publishControl, messages: controlMsgs } = usePubSub(
-    "HOST_CONTROL",
-    {
-      onMessageReceived: (m) => {
-        if (m.senderId === localParticipant?.id) return;
-        try {
-          controls.applySnapshot(JSON.parse(m.message));
-        } catch {
-          /* ignore malformed */
-        }
-      },
-    },
-  );
-  // Guests also apply the latest persisted snapshot from history, so someone
-  // who joins after the host set controls (e.g. locked a meeting) reliably
-  // learns the current state even if the live callback missed the replay.
-  useEffect(() => {
-    if (isHost) return;
-    const last = controlMsgs[controlMsgs.length - 1];
-    if (!last) return;
-    try {
-      controls.applySnapshot(JSON.parse(last.message));
-    } catch {
-      /* ignore malformed */
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isHost, controlMsgs]);
-  const pushControls = (next: typeof controlsSnapshot) => {
-    controls.applySnapshot(next);
-    publishControl(JSON.stringify(next), { persist: true });
-  };
-  const toggleWaitingRoom = () => {
-    // Enabling WR does NOT hold current participants -- only later joiners are
-    // held (via onParticipantJoined), so this can't evict people already in.
-    pushControls({
-      ...controlsSnapshot,
-      waitingRoomEnabled: !controls.waitingRoomEnabled,
-    });
-  };
-
-  // --- Waiting Room: host broadcasts the authoritative set; guests mirror it ---
-  // Guests apply the LATEST message from the persisted history (`messages`)
-  // rather than only live `onMessageReceived`, so a guest that subscribes a beat
-  // after the host publishes still picks up that they are being held.
-  const { publish: publishWaiting, messages: waitingMsgs } =
-    usePubSub("WAITING_SET");
-  useEffect(() => {
-    if (isHost) return; // host owns the truth; only guests mirror it
-    const last = waitingMsgs[waitingMsgs.length - 1];
-    if (!last) return;
-    try {
-      setWaitingSet(JSON.parse(last.message));
-    } catch {
-      /* ignore malformed */
-    }
-  }, [isHost, waitingMsgs]);
-  const publishWaitingRef = useRef(publishWaiting);
-  publishWaitingRef.current = publishWaiting;
-  useEffect(() => {
-    if (!isHost) return;
-    publishWaitingRef.current(JSON.stringify(waitingSet), { persist: true });
-  }, [isHost, waitingSet]);
-
-  // --- Bounce: targeted reason sent to a guest right before removing them ---
-  const { publish: publishBounce } = usePubSub("BOUNCE", {
-    onMessageReceived: (m) => {
-      if (useSessionStore.getState().role === "host") return;
-      setBounceReason(m.message);
-    },
-  });
-  publishBounceRef.current = publishBounce;
-
-  // --- Share control: cooperative "stop your share" (no native remote stop) ---
-  const { publish: publishStopShare } = usePubSub("SHARE_CONTROL", {
-    onMessageReceived: (m) => {
-      if (m.message === "STOP") {
-        try {
-          disableScreenShare();
-        } catch {
-          /* not sharing */
-        }
-      }
-    },
-  });
-  const publishStopShareRef = useRef(publishStopShare);
-  publishStopShareRef.current = publishStopShare;
-
-  const admitWaiting = (id: string) => {
-    admittedIds.current.add(id);
-    setWaitingSet((prev) => prev.filter((x) => x !== id));
-  };
-  const denyWaiting = (id: string) => {
-    publishBounceRef.current?.(REMOVED_MSG, { sendOnly: [id], persist: false });
-    // Delay the removal so the reason message lands before they disconnect.
-    const target = participants.get(id);
-    setTimeout(() => {
-      try {
-        target?.remove();
-      } catch {
-        /* already gone */
-      }
-    }, 600);
-    setWaitingSet((prev) => prev.filter((x) => x !== id));
-  };
-
-  const waitingIds = new Set(waitingSet);
-  const amWaiting = !isHost && waitingIds.has(localParticipant?.id ?? "");
-  const visibleIds = participantIds.filter((id) => !waitingIds.has(id));
-  const gallery = useGalleryTileSize(visibleIds.length);
+  const gallery = useGalleryTileSize(participantIds.length);
 
   // Picture-in-Picture composites the live participant videos in the stage.
   const stageRef = useRef<HTMLDivElement>(null);
@@ -406,6 +249,15 @@ export default function LiveMeetingView({
   const chatBlocked = !isHost && !controls.permissions.chat;
   const shareBlocked = !isHost && !controls.permissions.share;
   const unmuteBlocked = !isHost && !controls.permissions.unmute;
+
+  // --- Host meeting controls (Security menu): the server applies and broadcasts them ---
+  const toggleLock = () => send({ type: "set-controls", locked: !controls.locked });
+  const toggleWaitingRoom = () =>
+    send({ type: "set-controls", waiting_room: !controls.waitingRoomEnabled });
+  const togglePermission = (p: Permission) => {
+    const change = { [PERMISSION_FIELD[p]]: !controls.permissions[p] } as Partial<MeetingControls>;
+    send({ type: "set-controls", ...change });
+  };
 
   // --- Original Sound (Zoom): honor the persisted mic-fidelity preference ---
   // Build a mic track whose browser DSP (echo cancel / noise suppression /
@@ -464,14 +316,14 @@ export default function LiveMeetingView({
   const sendChat = async (text: string, files: File[]) => {
     if (chatBlocked) return;
     // Upload each attachment to VideoSDK temporary storage; only the small
-    // fileUrl + metadata travel over pubsub (never the base64 bytes).
+    // fileUrl + metadata travel over the socket (never the base64 bytes).
     const uploaded: ChatAttachment[] = [];
     for (const file of files) {
       try {
         const base64Data = await fileToBase64(file);
         const url = await uploadBase64File({
           base64Data,
-          token: VIDEOSDK_TOKEN,
+          token: mediaToken,
           fileName: file.name,
         });
         if (url) {
@@ -481,11 +333,14 @@ export default function LiveMeetingView({
         /* skip a file that failed to read/upload */
       }
     }
-    publishChat(JSON.stringify({ text, files: uploaded }), { persist: true });
+    send({
+      type: "chat",
+      text: uploaded.length > 0 ? JSON.stringify({ text, files: uploaded }) : text,
+    });
   };
 
   const handleDownloadFile = async (file: ChatAttachment) => {
-    const base64 = await fetchBase64File({ url: file.url, token: VIDEOSDK_TOKEN });
+    const base64 = await fetchBase64File({ url: file.url, token: mediaToken });
     if (!base64) return;
     const objectUrl = base64ToObjectUrl(base64, file.mime);
     triggerDownload(objectUrl, file.name);
@@ -500,7 +355,8 @@ export default function LiveMeetingView({
 
   // Host unmute enforcement: when revoked, immediately mute every unmuted
   // remote (handles anyone already talking). MicEnforcer children keep them
-  // muted continuously if they try to unmute again.
+  // muted continuously if they try to unmute again. disableMic() is SFU-enforced
+  // and only host tokens carry the permission to call it.
   useEffect(() => {
     if (!isHost || controls.permissions.unmute) return;
     participants.forEach((p) => {
@@ -515,48 +371,32 @@ export default function LiveMeetingView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isHost, controls.permissions.unmute]);
 
-  // Host share enforcement: if a remote is presenting when share is revoked,
-  // ask them to stop (cooperative -- no native remote-share-stop exists).
+  // Share enforcement: when the host revokes sharing, anyone presenting stops their own
+  // share (there is no native remote stop). Driven by the server-held permission.
   useEffect(() => {
-    if (!isHost || controls.permissions.share) return;
-    if (presenterId && presenterId !== localParticipant?.id) {
-      publishStopShareRef.current("STOP", {
-        sendOnly: [presenterId],
-        persist: false,
-      });
+    if (!shareBlocked || !presenterId || presenterId !== localId) return;
+    try {
+      disableScreenShare();
+    } catch {
+      /* not sharing */
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isHost, controls.permissions.share, presenterId]);
+  }, [shareBlocked, presenterId, localId]);
 
-  // When a waiting guest is admitted (amWaiting: true → false), restore the
-  // mic/cam intent they picked at pre-join (the host had forced them off).
-  const prevAmWaiting = useRef(amWaiting);
-  useEffect(() => {
-    if (prevAmWaiting.current && !amWaiting) {
-      if (initialMicOn && !localMicOn) toggleMic();
-      if (initialWebcamOn && !localWebcamOn) toggleWebcam();
-    }
-    prevAmWaiting.current = amWaiting;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [amWaiting]);
-
-  const panelVMs: ParticipantVM[] = [...participants.values()]
-    .filter((p) => !waitingIds.has(p.id))
-    .map((p) => ({
-      id: p.id,
-      name: p.displayName || "Guest",
-      isLocal: p.id === localParticipant?.id,
-      isHost: p.id === localParticipant?.id && isHost,
-      micOn: !!p.micOn,
-      webcamOn: !!p.webcamOn,
-      handRaised: raisedHands.has(p.id),
-      color: colorForId(p.id),
-    }));
-
-  const waitingVMs = waitingSet.map((id) => ({
-    id,
-    name: participants.get(id)?.displayName || "Guest",
+  const panelVMs: ParticipantVM[] = [...participants.values()].map((p) => ({
+    id: p.id,
+    name: p.displayName || "Guest",
+    isLocal: p.id === localParticipant?.id,
+    isHost: rosterById.get(p.id)?.role === "host",
+    micOn: !!p.micOn,
+    webcamOn: !!p.webcamOn,
+    handRaised: raisedHands.has(p.id),
+    color: colorForId(p.id),
   }));
+
+  const waitingVMs = room.waiting.map((w) => ({ id: String(w.id), name: w.name }));
+  const admitWaiting = (id: string) => send({ type: "admit", participant_id: Number(id) });
+  const denyWaiting = (id: string) => send({ type: "deny", participant_id: Number(id) });
 
   const openPanel = (panel: PanelType) => {
     setActivePanel((cur) => (cur === panel ? null : panel));
@@ -574,6 +414,11 @@ export default function LiveMeetingView({
 
   const handleEnd = () => {
     intentionalLeave.current = true;
+    // The server verifies the host, ends the meeting for the record and tells everyone.
+    // If the socket is down, fall back to the REST endpoint with the stored host token.
+    if (!send({ type: "end-meeting" })) {
+      api.endMeeting(meetingId, getHostToken(meetingId)).catch(() => {});
+    }
     try {
       end();
     } catch {
@@ -601,7 +446,7 @@ export default function LiveMeetingView({
     }
   };
 
-  // Host "Mute All" -- force-mute every remote participant.
+  // Host "Mute All" -- force-mute every remote participant (SFU-enforced).
   const muteAll = () => {
     participants.forEach((p) => {
       if (p.id !== localParticipant?.id) {
@@ -613,16 +458,6 @@ export default function LiveMeetingView({
       }
     });
   };
-
-  if (amWaiting) {
-    return (
-      <WaitingRoom
-        roomId={roomId}
-        name={localParticipant?.displayName || "Guest"}
-        onLeave={handleLeave}
-      />
-    );
-  }
 
   return (
     <div className="relative flex h-screen w-screen flex-col bg-stage">
@@ -638,8 +473,16 @@ export default function LiveMeetingView({
           </button>
         </div>
       )}
+      {notice && (
+        <div
+          role="status"
+          className="absolute left-1/2 top-14 z-30 -translate-x-1/2 rounded-lg bg-panel-2 px-4 py-2.5 text-sm text-text-primary shadow-lg ring-1 ring-panel-border"
+        >
+          {notice}
+        </div>
+      )}
       <TopBar
-        meetingId={roomId}
+        meetingId={meetingId}
         elapsed={elapsed}
         view={view}
         onSetView={setView}
@@ -649,7 +492,7 @@ export default function LiveMeetingView({
       <div className="relative flex min-h-0 flex-1">
         <div ref={stageRef} className="min-w-0 flex-1">
           {(() => {
-            const liveTiles = visibleIds.map((id) => (
+            const liveTiles = participantIds.map((id) => (
               <LiveParticipantTile
                 key={id}
                 participantId={id}
@@ -696,10 +539,10 @@ export default function LiveMeetingView({
             }
             // Speaker view → active speaker large + filmstrip of the rest.
             if (view === "speaker") {
-              const mainId = activeSpeakerId || visibleIds[0];
+              const mainId = activeSpeakerId || participantIds[0];
               return (
                 <SpeakerView
-                  filmstrip={visibleIds
+                  filmstrip={participantIds
                     .filter((id) => id !== mainId)
                     .map((id) => (
                       <LiveParticipantTile
@@ -725,13 +568,13 @@ export default function LiveMeetingView({
               );
             }
             // Single participant: centered 16:9 tile sized by height.
-            if (visibleIds.length === 1) {
+            if (participantIds.length === 1) {
               return (
                 <div className="flex h-full w-full items-center justify-center p-4">
                   <div className="h-full max-w-full" style={{ aspectRatio: "16 / 9" }}>
                     <LiveParticipantTile
-                      participantId={visibleIds[0]}
-                      handRaised={raisedHands.has(visibleIds[0])}
+                      participantId={participantIds[0]}
+                      handRaised={raisedHands.has(participantIds[0])}
                     />
                   </div>
                 </div>
@@ -745,7 +588,7 @@ export default function LiveMeetingView({
                   ref={gallery.ref}
                   className="flex h-full w-full flex-wrap content-center items-center justify-center gap-2"
                 >
-                  {visibleIds.map((id) => (
+                  {participantIds.map((id) => (
                     <div key={id} style={gallery.tileStyle}>
                       <LiveParticipantTile
                         participantId={id}
@@ -770,7 +613,10 @@ export default function LiveMeetingView({
             onMuteAll={muteAll}
             onRaiseHand={raiseHand}
             renderRowActions={(id) => (
-              <LiveParticipantRowActions participantId={id} />
+              <LiveParticipantRowActions
+                participantId={id}
+                onRemove={() => send({ type: "remove", participant_id: Number(id) })}
+              />
             )}
           />
         )}
@@ -800,7 +646,7 @@ export default function LiveMeetingView({
 
       {/* Host-side continuous unmute backstop (render-null, one per remote). */}
       {isHost &&
-        visibleIds
+        participantIds
           .filter((id) => id !== localParticipant?.id)
           .map((id) => (
             <MicEnforcer
@@ -814,7 +660,7 @@ export default function LiveMeetingView({
         micOn={!!localMicOn}
         webcamOn={!!localWebcamOn}
         isHost={isHost}
-        participantCount={visibleIds.length}
+        participantCount={participantIds.length}
         activePanel={activePanel}
         onToggleMic={() => handleToggleMic()}
         onToggleWebcam={() => toggleWebcam()}
@@ -854,15 +700,10 @@ export default function LiveMeetingView({
         onRaiseHand={raiseHand}
         onApplyMic={(id) => applyMicDevice(id)}
         onApplyCamera={(id) => changeWebcam?.(id)}
-        controls={controlsSnapshot}
-        onToggleLock={() => pushControls({ ...controlsSnapshot, locked: !controls.locked })}
+        controls={controls}
+        onToggleLock={toggleLock}
         onToggleWaitingRoom={toggleWaitingRoom}
-        onTogglePermission={(p) =>
-          pushControls({
-            ...controlsSnapshot,
-            permissions: { ...controls.permissions, [p]: !controls.permissions[p] },
-          })
-        }
+        onTogglePermission={togglePermission}
       />
     </div>
   );

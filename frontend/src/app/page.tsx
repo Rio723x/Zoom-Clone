@@ -3,34 +3,15 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Video, Plus, Calendar, Copy, Link2, Clock, Users,
-  ChevronRight, Trash2, MoreHorizontal, Search, Bell,
+  Video, Plus, Calendar, Copy, Link2, Clock,
+  Trash2, MoreHorizontal, Search, Bell, Menu,
   Settings, HelpCircle, Home, AlignLeft, History,
 } from "lucide-react";
-import axios from "axios";
-
-const API_BASE = "http://localhost:8000/api";
+import { api, apiErrorMessage } from "@/lib/api";
+import { getHostToken, removeHostToken, saveHostToken } from "@/lib/hostTokens";
+import type { Meeting, RecentMeeting } from "@/lib/types";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-interface Meeting {
-  id: string;
-  title: string;
-  description?: string;
-  scheduled_at?: string;
-  duration?: number;
-  is_instant: boolean;
-  created_at: string;
-}
-
-interface RecentMeeting {
-  id: string;
-  meeting_id: string;
-  title: string;
-  host_name?: string;
-  ended_at: string;
-  duration_minutes?: number;
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function useClock() {
   const [now, setNow] = useState<Date | null>(null);
@@ -66,7 +47,25 @@ function copyText(text: string) {
 // ─── Sidebar Nav ──────────────────────────────────────────────────────────────
 type Tab = "home" | "meetings" | "history";
 
-function Sidebar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
+/**
+ * Row actions that appear on hover. Only devices that can hover get the hide-until-hover
+ * behaviour; on touch screens (phones, tablets) they stay visible, since there is no hover.
+ */
+const REVEAL_ON_HOVER =
+  "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100";
+
+function Sidebar({
+  active,
+  onChange,
+  open,
+  onClose,
+}: {
+  active: Tab;
+  onChange: (t: Tab) => void;
+  /** Small screens only: whether the off-canvas drawer is showing. */
+  open: boolean;
+  onClose: () => void;
+}) {
   const items: { id: Tab; icon: typeof Home; label: string }[] = [
     { id: "home",     icon: Home,      label: "Home"     },
     { id: "meetings", icon: AlignLeft, label: "Meetings" },
@@ -74,7 +73,16 @@ function Sidebar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void
   ];
 
   return (
-    <aside className="flex h-full w-[220px] shrink-0 flex-col border-r border-portal-border bg-portal-sidebar">
+    <>
+    {open && (
+      <div className="fixed inset-0 z-30 bg-black/40 md:hidden" onClick={onClose} aria-hidden="true" />
+    )}
+    <aside
+      aria-label="Main navigation"
+      className={`fixed inset-y-0 left-0 z-40 flex h-full w-[220px] shrink-0 flex-col border-r border-portal-border bg-portal-sidebar transition-transform duration-200 md:static md:z-auto md:translate-x-0 ${
+        open ? "translate-x-0" : "-translate-x-full"
+      }`}
+    >
       {/* Logo */}
       <div className="flex h-14 items-center gap-2.5 px-5 border-b border-portal-border">
         <svg width="28" height="28" viewBox="0 0 40 40" fill="none">
@@ -90,7 +98,10 @@ function Sidebar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void
         {items.map(({ id, icon: Icon, label }) => (
           <button
             key={id}
-            onClick={() => onChange(id)}
+            onClick={() => {
+              onChange(id);
+              onClose();
+            }}
             className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
               active === id
                 ? "bg-zoom-blue-light text-zoom-blue"
@@ -113,22 +124,32 @@ function Sidebar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void
         </button>
       </div>
     </aside>
+    </>
   );
 }
 
 // ─── Top bar ──────────────────────────────────────────────────────────────────
-function TopBar() {
+function TopBar({ onMenu }: { onMenu: () => void }) {
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-portal-border bg-portal-sidebar px-5">
-      <div className="relative w-64">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-label" />
-        <input
-          type="text"
-          placeholder="Search"
-          className="w-full rounded-lg bg-portal-bg py-1.5 pl-9 pr-3 text-sm text-text-on-light placeholder:text-text-label outline-none focus:ring-1 focus:ring-zoom-blue"
-        />
+    <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-portal-border bg-portal-sidebar px-3 sm:px-5">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <button
+          onClick={onMenu}
+          aria-label="Open menu"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-text-label hover:bg-portal-hover md:hidden"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+        <div className="relative w-full max-w-64">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-text-label" />
+          <input
+            type="text"
+            placeholder="Search"
+            className="w-full rounded-lg bg-portal-bg py-1.5 pl-9 pr-3 text-sm text-text-on-light placeholder:text-text-label outline-none focus:ring-1 focus:ring-zoom-blue"
+          />
+        </div>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex shrink-0 items-center gap-3">
         <button className="flex h-8 w-8 items-center justify-center rounded-full text-text-label hover:bg-portal-hover">
           <Bell className="h-[18px] w-[18px]" />
         </button>
@@ -154,11 +175,11 @@ function ActionTiles({
   starting: boolean;
 }) {
   return (
-    <div className="flex gap-3">
+    <div className="grid max-w-[444px] grid-cols-3 gap-3">
       <button
         onClick={onNewMeeting}
         disabled={starting}
-        className="flex flex-col items-center gap-2.5 rounded-2xl bg-portal-card p-5 w-[140px] shadow-sm border border-portal-border hover:shadow-md transition-shadow disabled:opacity-60"
+        className="flex flex-col items-center gap-2.5 rounded-2xl bg-portal-card p-4 sm:p-5 w-full shadow-sm border border-portal-border hover:shadow-md transition-shadow disabled:opacity-60"
       >
         <span className="flex h-14 w-14 items-center justify-center rounded-full bg-[#ff6b35]">
           <Video className="h-7 w-7 text-white" strokeWidth={2} />
@@ -170,7 +191,7 @@ function ActionTiles({
 
       <button
         onClick={onJoin}
-        className="flex flex-col items-center gap-2.5 rounded-2xl bg-portal-card p-5 w-[140px] shadow-sm border border-portal-border hover:shadow-md transition-shadow"
+        className="flex flex-col items-center gap-2.5 rounded-2xl bg-portal-card p-4 sm:p-5 w-full shadow-sm border border-portal-border hover:shadow-md transition-shadow"
       >
         <span className="flex h-14 w-14 items-center justify-center rounded-full bg-zoom-blue">
           <Plus className="h-7 w-7 text-white" strokeWidth={2.5} />
@@ -180,7 +201,7 @@ function ActionTiles({
 
       <button
         onClick={onSchedule}
-        className="flex flex-col items-center gap-2.5 rounded-2xl bg-portal-card p-5 w-[140px] shadow-sm border border-portal-border hover:shadow-md transition-shadow"
+        className="flex flex-col items-center gap-2.5 rounded-2xl bg-portal-card p-4 sm:p-5 w-full shadow-sm border border-portal-border hover:shadow-md transition-shadow"
       >
         <span className="flex h-14 w-14 items-center justify-center rounded-full bg-zoom-blue">
           <Calendar className="h-7 w-7 text-white" strokeWidth={1.8} />
@@ -206,10 +227,10 @@ function UpcomingCard({
   const [menu, setMenu] = useState(false);
 
   return (
-    <div className="group flex items-center justify-between rounded-xl bg-portal-card px-4 py-3.5 shadow-sm border border-portal-border">
+    <div className="group flex flex-col gap-3 rounded-xl bg-portal-card px-4 py-3.5 shadow-sm border border-portal-border sm:flex-row sm:items-center sm:justify-between">
       {/* Left: time bar */}
-      <div className="flex items-start gap-4">
-        <div className="flex w-16 flex-col items-center rounded-lg border border-portal-border bg-portal-bg py-1.5 text-center">
+      <div className="flex min-w-0 items-start gap-4">
+        <div className="flex w-16 shrink-0 flex-col items-center rounded-lg border border-portal-border bg-portal-bg py-1.5 text-center">
           <span className="text-[11px] font-medium uppercase text-text-label">
             {new Date(meeting.scheduled_at!).toLocaleDateString([], { month: "short" })}
           </span>
@@ -229,11 +250,11 @@ function UpcomingCard({
       </div>
 
       {/* Right: actions */}
-      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className={`flex shrink-0 items-center gap-2 transition-opacity ${REVEAL_ON_HOVER}`}>
         <button
           onClick={onCopyLink}
           title="Copy invite link"
-          className="flex h-8 items-center gap-1.5 rounded-lg border border-portal-border px-2.5 text-xs font-medium text-text-label hover:bg-portal-hover"
+          className="flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-portal-border px-2.5 text-xs font-medium text-text-label hover:bg-portal-hover"
         >
           <Link2 className="h-3.5 w-3.5" /> Copy Link
         </button>
@@ -272,8 +293,8 @@ function UpcomingCard({
 // ─── Recent Meeting Row ───────────────────────────────────────────────────────
 function RecentRow({ meeting }: { meeting: RecentMeeting }) {
   return (
-    <div className="flex items-center justify-between rounded-xl bg-portal-card px-4 py-3 border border-portal-border group">
-      <div className="flex items-center gap-3">
+    <div className="group flex items-center justify-between gap-3 rounded-xl bg-portal-card px-4 py-3 border border-portal-border">
+      <div className="flex min-w-0 items-center gap-3">
         <div className="flex h-9 w-9 items-center justify-center rounded-full bg-zoom-blue-light text-zoom-blue">
           <Clock className="h-4 w-4" />
         </div>
@@ -288,7 +309,7 @@ function RecentRow({ meeting }: { meeting: RecentMeeting }) {
       </div>
       <button
         onClick={() => copyText(`${window.location.origin}/meeting/${meeting.meeting_id}`)}
-        className="flex h-7 items-center gap-1.5 rounded-lg border border-portal-border px-2 text-xs text-text-label opacity-0 group-hover:opacity-100 hover:bg-portal-hover transition-opacity"
+        className={`flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-portal-border px-2 text-xs text-text-label hover:bg-portal-hover transition-opacity ${REVEAL_ON_HOVER}`}
       >
         <Copy className="h-3.5 w-3.5" /> Copy Link
       </button>
@@ -388,7 +409,7 @@ function MeetingsTab({
 }) {
   return (
     <div>
-      <div className="mb-5 flex items-center justify-between">
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-text-on-light">Upcoming Meetings</h1>
         <button
           onClick={onSchedule}
@@ -402,7 +423,7 @@ function MeetingsTab({
         <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-portal-border bg-portal-card py-16 text-center">
           <Calendar className="mb-3 h-10 w-10 text-text-label" />
           <p className="text-sm font-medium text-text-on-light">No upcoming meetings</p>
-          <p className="mt-1 text-xs text-text-label">Click "Schedule a Meeting" to get started.</p>
+          <p className="mt-1 text-xs text-text-label">Click &quot;Schedule a Meeting&quot; to get started.</p>
         </div>
       ) : (
         <div className="space-y-2">
@@ -461,6 +482,7 @@ export default function DashboardPage() {
   const [upcoming, setUpcoming] = useState<Meeting[]>([]);
   const [recent, setRecent] = useState<RecentMeeting[]>([]);
   const [starting, setStarting] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const showToast = useCallback((msg: string) => {
@@ -469,13 +491,16 @@ export default function DashboardPage() {
   }, []);
 
   const fetchData = useCallback(async () => {
-    const [upRes, recRes] = await Promise.all([
-      axios.get(`${API_BASE}/meetings/upcoming`).catch(() => ({ data: [] })),
-      axios.get(`${API_BASE}/meetings/recent`).catch(() => ({ data: [] })),
+    const [upcomingMeetings, recentMeetings] = await Promise.all([
+      api.listUpcoming().catch(() => null),
+      api.listRecent().catch(() => null),
     ]);
-    setUpcoming(upRes.data);
-    setRecent(recRes.data);
-  }, []);
+    if (upcomingMeetings) setUpcoming(upcomingMeetings);
+    if (recentMeetings) setRecent(recentMeetings);
+    if (!upcomingMeetings || !recentMeetings) {
+      showToast("Couldn't load your meetings. Is the server running?");
+    }
+  }, [showToast]);
 
   useEffect(() => {
     fetchData();
@@ -487,27 +512,36 @@ export default function DashboardPage() {
   async function handleNewMeeting() {
     setStarting(true);
     try {
-      const res = await axios.post(`${API_BASE}/meetings/instant`);
-      router.push(`/meeting/${res.data.id}`);
-    } catch {
-      router.push(`/meeting/demo-${Date.now().toString(36)}`);
+      const meeting = await api.createInstantMeeting();
+      // Remember we created it, so we join as its host.
+      saveHostToken(meeting.id, meeting.host_token);
+      router.push(`/meeting/${meeting.id}`);
+    } catch (err) {
+      showToast(apiErrorMessage(err, "Couldn't start a meeting. Please try again."));
+      setStarting(false);
     }
   }
 
   async function handleDelete(id: string) {
-    await axios.delete(`${API_BASE}/meetings/${id}`).catch(() => {});
+    try {
+      await api.deleteMeeting(id, getHostToken(id));
+    } catch (err) {
+      showToast(apiErrorMessage(err, "Couldn't delete the meeting."));
+      return;
+    }
+    removeHostToken(id);
     setUpcoming(prev => prev.filter(m => m.id !== id));
     showToast("Meeting deleted.");
   }
 
   return (
     <div className="flex h-screen bg-portal-bg">
-      <Sidebar active={tab} onChange={setTab} />
+      <Sidebar active={tab} onChange={setTab} open={menuOpen} onClose={() => setMenuOpen(false)} />
 
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <TopBar />
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <TopBar onMenu={() => setMenuOpen(true)} />
 
-        <main className="flex-1 overflow-y-auto px-8 py-6">
+        <main className="flex-1 overflow-y-auto px-4 py-5 sm:px-8 sm:py-6">
           <div className="mx-auto max-w-2xl">
             {tab === "home" && (
               <HomeTab

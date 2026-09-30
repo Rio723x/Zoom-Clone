@@ -1,4 +1,4 @@
-import { initials } from "@/lib/mock";
+import { initials } from "@/lib/initials";
 import { cn } from "@/lib/cn";
 
 interface AvatarProps {

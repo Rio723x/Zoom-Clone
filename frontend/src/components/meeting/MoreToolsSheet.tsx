@@ -10,7 +10,7 @@ import {
   ZPolling,
   ZRecord,
 } from "@/components/icons/ZoomIcons";
-import type { Permission } from "@/store/useMeetingControlsStore";
+import type { Permission } from "@/lib/controls";
 import type { PanelType } from "./types";
 
 interface MoreToolsSheetProps {

@@ -6,9 +6,9 @@ import SecurityMenu from "./SecurityMenu";
 import DeviceMenu from "./DeviceMenu";
 import MoreToolsSheet from "./MoreToolsSheet";
 import { useMediaDevices } from "./useMediaDevices";
-import { useIsMobile } from "@/hooks/useMediaQuery";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useSettingsStore } from "@/store/useSettingsStore";
-import type { Permission } from "@/store/useMeetingControlsStore";
+import type { Permission } from "@/lib/controls";
 import {
   ZMute,
   ZUnmute,
@@ -23,6 +23,13 @@ import {
   ZReaction,
 } from "@/components/icons/ZoomIcons";
 import type { PanelType } from "./types";
+
+/**
+ * Below this width the full control bar (media + security + panels + reactions) no longer
+ * fits without its centred group running into the mic/camera group, so we switch to the
+ * compact bar with a "More" sheet. Measured, not the generic `md` breakpoint.
+ */
+const COMPACT_BAR_QUERY = "(max-width: 1099px)";
 
 interface ControlBarProps {
   micOn: boolean;
@@ -97,7 +104,7 @@ export default function ControlBar({
   const [camMenu, setCamMenu] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
 
-  const isMobile = useIsMobile();
+  const isCompact = useMediaQuery(COMPACT_BAR_QUERY);
   const { cameras, mics, speakers } = useMediaDevices();
   const { micId, cameraId, speakerId, setMicId, setCameraId, setSpeakerId } =
     useSettingsStore();
@@ -203,7 +210,7 @@ export default function ControlBar({
         </div>
         {/* Mobile: everything else collapses into a "More" bottom sheet. Kept in
             normal flow (not the absolute-centered group) so it can't collide. */}
-        {isMobile && (
+        {isCompact && (
           <ControlBarButton
             icon={MoreHorizontal}
             label="More"
@@ -215,8 +222,11 @@ export default function ControlBar({
 
       {/* Center: meeting features -- absolutely centered so side groups can't shift it.
           Desktop only; on mobile these live in the More sheet. */}
-      {!isMobile && (
-      <div className="absolute left-1/2 flex -translate-x-1/2 items-center gap-1">
+      {!isCompact && (
+      // Centered without a CSS transform: a transformed ancestor turns the menus'
+      // `fixed inset-0` click-away backdrops into small boxes instead of full-screen ones.
+      <div className="pointer-events-none absolute inset-x-0 flex justify-center">
+      <div className="pointer-events-auto flex items-center gap-1">
         {isHost && (
           <div className="relative">
             <ControlBarButton
@@ -373,6 +383,7 @@ export default function ControlBar({
           )}
         </div>
       </div>
+      </div>
       )}
 
       {/* Right: leave / end */}
@@ -410,7 +421,7 @@ export default function ControlBar({
         )}
       </div>
 
-      {isMobile && (
+      {isCompact && (
         <MoreToolsSheet
           open={moreOpen}
           onClose={() => setMoreOpen(false)}

@@ -5,8 +5,11 @@ import { MoreHorizontal, MicOff, VideoOff, UserX } from "lucide-react";
 /** Host-only per-participant controls (mute, stop video, remove) for a remote participant. */
 export default function LiveParticipantRowActions({
   participantId,
+  onRemove,
 }: {
   participantId: string;
+  /** Tells the server first, so the removed person can't fetch a new media token. */
+  onRemove: () => void;
 }) {
   const { disableMic, disableWebcam, remove, micOn, webcamOn } =
     useParticipant(participantId);
@@ -51,6 +54,7 @@ export default function LiveParticipantRowActions({
               label="Remove"
               danger
               onClick={() => {
+                onRemove();
                 remove();
                 setOpen(false);
               }}

@@ -1,37 +1,50 @@
+import type { RefObject } from "react";
 import { MeetingProvider, Constants } from "@videosdk.live/react-sdk";
-import { VIDEOSDK_TOKEN } from "@/lib/videosdk/token";
+import type { MeetingSocket, TransientHandlers } from "@/hooks/useMeetingSocket";
+import type { MediaCredentials } from "@/lib/types";
 import LiveMeetingView from "./LiveMeetingView";
 
 interface LiveMeetingProps {
-  roomId: string;
+  /** Our meeting id (what the user sees and shares). */
+  meetingId: string;
+  /** Token and room id issued by our backend for this participant. */
+  media: MediaCredentials;
+  participantId: number;
   name: string;
+  /** Initial mic/camera state chosen on the pre-join screen. */
   micOn: boolean;
   webcamOn: boolean;
+  socket: MeetingSocket;
+  handlersRef: RefObject<TransientHandlers>;
   onLeave: (reason?: string) => void;
 }
 
 /**
- * Wraps the video provider for a single room. Keyed by roomId upstream
- * so switching rooms cleanly remounts the provider.
+ * Wraps the video provider for a single room. Keyed by meeting id upstream so switching
+ * meetings cleanly remounts the provider.
+ *
+ * The token is signed by our backend and scoped to this room and participant; host
+ * permissions (mute/remove others) exist only in tokens issued to the host.
  */
 export default function LiveMeeting({
-  roomId,
+  meetingId,
+  media,
+  participantId,
   name,
   micOn,
   webcamOn,
+  socket,
+  handlersRef,
   onLeave,
 }: LiveMeetingProps) {
   return (
-    // Security enforcement is host-authoritative: the host issues SFU-enforced
-    // commands (disableMic / disableWebcam / remove) plus cooperative pubsub.
-    // Making it bulletproof against a fully modified client would require
-    // per-participant role permissions minted into the JWT server-side, which
-    // belongs in the token (not this client config) and needs a token backend --
-    // intentionally out of scope for this demo.
     <MeetingProvider
-      token={VIDEOSDK_TOKEN}
+      token={media.token}
       config={{
-        meetingId: roomId,
+        meetingId: media.room_id,
+        // Media identity == our participant id, so the roster, chat and host actions
+        // coming from the backend line up with the video participants.
+        participantId: String(participantId),
         name: name || "Guest",
         micEnabled: micOn,
         webcamEnabled: webcamOn,
@@ -42,9 +55,10 @@ export default function LiveMeeting({
       joinWithoutUserInteraction
     >
       <LiveMeetingView
-        roomId={roomId}
-        initialMicOn={micOn}
-        initialWebcamOn={webcamOn}
+        meetingId={meetingId}
+        mediaToken={media.token}
+        socket={socket}
+        handlersRef={handlersRef}
         onLeave={onLeave}
       />
     </MeetingProvider>

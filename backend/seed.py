@@ -1,88 +1,104 @@
-import uuid
-from datetime import datetime, timedelta, timezone
-from app.database import SessionLocal, engine
-from app import models
+import secrets
+from datetime import timedelta
 
-# Ensure tables exist
-models.Base.metadata.create_all(bind=engine)
+from app.core.clock import utcnow
+from app.core.config import settings
+from app.core.database import Base, SessionLocal, engine
+from app.models import (
+    Meeting,
+    MeetingStatus,
+    Message,
+    Participant,
+    ParticipantRole,
+    Poll,
+    PollOption,
+    PollVote,
+)
+
+HOST = settings.default_host_name
 
 
-def seed_db():
-    db = SessionLocal()
-
-    # Clear existing data for a clean slate
-    db.query(models.RecentMeeting).delete()
-    db.query(models.Meeting).delete()
-    db.commit()
-
-    now = datetime.now(timezone.utc)
-
-    # ── Upcoming scheduled meetings ──────────────────────────────────────
-    upcoming = [
-        models.Meeting(
-            id="892-573-401",
-            title="Weekly Team Sync",
-            description="Our regular Monday stand-up.",
-            scheduled_at=now + timedelta(days=1, hours=2),
-            duration=60,
-            is_instant=False,
-        ),
-        models.Meeting(
-            id="134-820-675",
-            title="Product Roadmap Review",
-            description="Q4 planning session with all stakeholders.",
-            scheduled_at=now + timedelta(days=2),
-            duration=90,
-            is_instant=False,
-        ),
-        models.Meeting(
-            id="567-238-910",
-            title="Client Presentation – Acme Corp",
-            description="Demo of the new dashboard features.",
-            scheduled_at=now + timedelta(days=3, hours=5),
-            duration=45,
-            is_instant=False,
-        ),
-        models.Meeting(
-            id="301-994-822",
-            title="Engineering Sprint Planning",
-            scheduled_at=now + timedelta(days=5),
-            duration=60,
-            is_instant=False,
-        ),
+def _upcoming(now):
+    specs = [
+        ("892-573-401", "Weekly Team Sync", "Our regular Monday stand-up.", timedelta(days=1, hours=2), 60),
+        ("134-820-675", "Product Roadmap Review", "Q4 planning session with all stakeholders.", timedelta(days=2), 90),
+        ("567-238-910", "Client Presentation - Acme Corp", "Demo of the new dashboard features.", timedelta(days=3, hours=5), 45),
+        ("301-994-822", "Engineering Sprint Planning", None, timedelta(days=5), 60),
+    ]
+    return [
+        Meeting(
+            id=meeting_id,
+            title=title,
+            description=description,
+            host_name=HOST,
+            host_token=secrets.token_urlsafe(24),
+            status=MeetingStatus.SCHEDULED,
+            scheduled_at=now + offset,
+            duration_minutes=duration,
+        )
+        for meeting_id, title, description, offset, duration in specs
     ]
 
-    # ── Recent (completed) meetings ──────────────────────────────────────
-    recent = [
-        models.RecentMeeting(
-            id=str(uuid.uuid4()),
-            meeting_id="771-002-443",
-            title="Design Review",
-            host_name="Alex Johnson",
-            ended_at=now - timedelta(hours=2),
-            duration_minutes=40,
-        ),
-        models.RecentMeeting(
-            id=str(uuid.uuid4()),
-            meeting_id="654-118-330",
-            title="All-Hands Meeting",
-            host_name="Alex Johnson",
-            ended_at=now - timedelta(days=1),
-            duration_minutes=90,
-        ),
-        models.RecentMeeting(
-            id=str(uuid.uuid4()),
-            meeting_id="489-762-051",
-            title="1:1 with Manager",
-            host_name="Alex Johnson",
-            ended_at=now - timedelta(days=2),
-            duration_minutes=30,
-        ),
+
+def _ended(now):
+    specs = [
+        ("771-002-443", "Design Review", timedelta(hours=2), 40, ["Priya Sharma", "Sam Lee"]),
+        ("654-118-330", "All-Hands Meeting", timedelta(days=1), 90, ["Priya Sharma", "Sam Lee", "Jordan Kim"]),
+        ("489-762-051", "1:1 with Manager", timedelta(days=2), 30, ["Jordan Kim"]),
+    ]
+    meetings = []
+    for meeting_id, title, ago, duration, guests in specs:
+        ended_at = now - ago
+        started_at = ended_at - timedelta(minutes=duration)
+        meeting = Meeting(
+            id=meeting_id,
+            title=title,
+            host_name=HOST,
+            host_token=secrets.token_urlsafe(24),
+            status=MeetingStatus.ENDED,
+            started_at=started_at,
+            ended_at=ended_at,
+            duration_minutes=duration,
+            scheduled_at=started_at,
+        )
+        meeting.participants = [
+            Participant(display_name=HOST, role=ParticipantRole.HOST, joined_at=started_at, left_at=ended_at),
+            *(
+                Participant(display_name=name, joined_at=started_at, left_at=ended_at)
+                for name in guests
+            ),
+        ]
+        meetings.append(meeting)
+    return meetings
+
+
+def _add_chat_and_poll(meeting: Meeting) -> None:
+    meeting.messages = [
+        Message(sender_name=HOST, text="Thanks everyone for joining.", sent_at=meeting.started_at),
+        Message(sender_name="Priya Sharma", text="Happy to be here!", sent_at=meeting.started_at + timedelta(minutes=1)),
+    ]
+    poll = Poll(question="Which day works best for the follow-up?", is_open=False, created_at=meeting.started_at)
+    options = [PollOption(text="Tuesday"), PollOption(text="Thursday")]
+    poll.options = options
+    meeting.polls = [poll]
+    voters = {p.display_name: p for p in meeting.participants}
+    poll.votes = [
+        PollVote(participant=voters["Priya Sharma"], option=options[0]),
+        PollVote(participant=voters["Sam Lee"], option=options[1]),
     ]
 
-    db.add_all(upcoming + recent)
-    db.commit()
-    db.close()
+
+def seed_db() -> None:
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    now = utcnow()
+    ended = _ended(now)
+    _add_chat_and_poll(ended[0])
+
+    with SessionLocal() as db:
+        db.add_all(_upcoming(now) + ended)
+        db.commit()
     print("Database seeded successfully.")
 
 
