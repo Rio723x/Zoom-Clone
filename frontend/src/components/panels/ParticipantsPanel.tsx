@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Mic, MicOff, Video, VideoOff, Hand, MoreHorizontal, UserPlus, Check } from "lucide-react";
+import { Mic, MicOff, Video, VideoOff, Hand, MoreHorizontal, Check } from "lucide-react";
 import SidePanel from "./SidePanel";
 import Avatar from "@/components/ui/Avatar";
 import type { ParticipantVM } from "@/lib/participantVM";
@@ -66,32 +66,47 @@ export default function ParticipantsPanel({
           <div className="flex items-center justify-between">
             <button
               onClick={copyInviteLink}
-              className="flex items-center gap-1.5 rounded-md border border-panel-border px-3 py-1.5 text-xs font-medium hover:bg-hover"
+              className="flex h-9 items-center gap-1.5 rounded-full bg-[#2b2b2e] px-5 text-xs font-semibold hover:bg-[#38383c]"
             >
               {copied ? (
                 <>
                   <Check className="h-4 w-4 text-zoom-blue" /> Copied
                 </>
               ) : (
-                <>
-                  <UserPlus className="h-4 w-4" /> Invite
-                </>
+                "Invite"
               )}
             </button>
             <button
               onClick={onMuteAll}
-              className="rounded-md px-3 py-1.5 text-xs font-medium text-zoom-blue hover:bg-hover"
+              className="h-9 rounded-full bg-[#2b2b2e] px-5 text-xs font-semibold hover:bg-[#38383c]"
             >
               Mute All
             </button>
+            <button className="h-9 rounded-full border-2 border-[#2d8cff] px-6 text-xs font-semibold hover:bg-white/5">
+              More
+            </button>
           </div>
         ) : (
-          <button
-            onClick={onRaiseHand}
-            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-panel-border px-3 py-1.5 text-xs font-medium hover:bg-hover"
-          >
-            <Hand className="h-4 w-4" /> Raise Hand
-          </button>
+          <div className="flex items-center justify-between">
+            <button
+              onClick={copyInviteLink}
+              className="flex h-9 items-center gap-1.5 rounded-full bg-[#2b2b2e] px-5 text-xs font-semibold hover:bg-[#38383c]"
+            >
+              {copied ? (
+                <>
+                  <Check className="h-4 w-4 text-zoom-blue" /> Copied
+                </>
+              ) : (
+                "Invite"
+              )}
+            </button>
+            <button
+              onClick={onRaiseHand}
+              className="flex h-9 items-center gap-1.5 rounded-full bg-[#2b2b2e] px-5 text-xs font-semibold hover:bg-[#38383c]"
+            >
+              <Hand className="h-4 w-4" /> Raise Hand
+            </button>
+          </div>
         )
       }
     >
@@ -103,7 +118,7 @@ export default function ParticipantsPanel({
           {waiting.map((w) => (
             <div
               key={w.id}
-              className="flex items-center gap-3 px-4 py-2 hover:bg-hover/50"
+              className="flex items-center gap-3 px-4 py-2 hover:bg-white/5"
             >
               <Avatar name={w.name} color="#6b7280" size={32} />
               <span className="min-w-0 flex-1 truncate text-sm text-text-primary">
@@ -129,37 +144,37 @@ export default function ParticipantsPanel({
         {participants.map((p) => (
           <li
             key={p.id}
-            className="group flex items-center gap-3 px-4 py-2 hover:bg-hover/50"
+            className="group flex items-center gap-3 px-4 py-2 hover:bg-white/5"
           >
             <Avatar name={p.name} color={p.color} size={32} />
-            <div className="min-w-0 flex-1">
-              <span className="text-sm text-text-primary">
-                {p.name}
-                {p.isLocal && <span className="text-text-secondary"> (You)</span>}
-              </span>
-              {p.isHost && (
-                <span className="ml-1 text-xs text-text-secondary">Host</span>
+            <div className="min-w-0 flex-1 truncate text-sm text-text-primary">
+              {p.name}
+              {(p.isHost || p.isLocal) && (
+                <span>
+                  ({[p.isHost && "Host", p.isLocal && "me"].filter(Boolean).join(", ")})
+                </span>
               )}
             </div>
             {p.handRaised && <Hand className="h-4 w-4 text-raise-hand" />}
             {p.micOn ? (
-              <Mic className="h-4 w-4 text-text-secondary" />
+              <Mic className="h-4 w-4 text-white/80" />
             ) : (
-              <MicOff className="h-4 w-4 text-leave-hover" />
+              <MicOff className="h-4 w-4 text-[#f0587a]" />
             )}
             {p.webcamOn ? (
-              <Video className="h-4 w-4 text-text-secondary" />
+              <Video className="h-4 w-4 text-white/80" />
             ) : (
-              <VideoOff className="h-4 w-4 text-leave-hover" />
+              <VideoOff className="h-4 w-4 text-[#f0587a]" />
             )}
-            {isHost && !p.isLocal && (
-              renderRowActions ? (
-                renderRowActions(p.id)
-              ) : (
-                <button className="flex h-6 w-6 items-center justify-center rounded opacity-0 hover:bg-hover group-hover:opacity-100">
-                  <MoreHorizontal className="h-4 w-4 text-text-secondary" />
-                </button>
-              )
+            {isHost && !p.isLocal && renderRowActions ? (
+              renderRowActions(p.id)
+            ) : (
+              <button
+                className="flex h-6 w-6 items-center justify-center rounded hover:bg-white/10"
+                aria-label="More"
+              >
+                <MoreHorizontal className="h-4 w-4 text-white" />
+              </button>
             )}
           </li>
         ))}

@@ -103,6 +103,7 @@ export default function ControlBar({
   const [micMenu, setMicMenu] = useState(false);
   const [camMenu, setCamMenu] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [moreMenu, setMoreMenu] = useState(false);
 
   const isCompact = useMediaQuery(COMPACT_BAR_QUERY);
   const { cameras, mics, speakers } = useMediaDevices();
@@ -116,7 +117,7 @@ export default function ControlBar({
   const unmuteBlocked = !isHost && perm ? !perm.unmute : false;
 
   return (
-    <div className="relative flex h-20 shrink-0 items-center justify-between bg-controlbar px-4 text-text-primary">
+    <div className="relative flex h-20 shrink-0 items-center justify-between bg-controlbar px-4 text-white">
       {/* Left: media controls (fixed widths so the label swap doesn't shift the bar) */}
       <div className="flex items-center gap-1">
         <div className="relative">
@@ -175,7 +176,7 @@ export default function ControlBar({
         <div className="relative">
           <ControlBarButton
             icon={webcamOn ? ZStopVideo : ZStartVideo}
-            label={webcamOn ? "Stop Video" : "Start Video"}
+            label="Video"
             danger={!webcamOn}
             hasMenu
             minWidth={84}
@@ -227,34 +228,6 @@ export default function ControlBar({
       // `fixed inset-0` click-away backdrops into small boxes instead of full-screen ones.
       <div className="pointer-events-none absolute inset-x-0 flex justify-center">
       <div className="pointer-events-auto flex items-center gap-1">
-        {isHost && (
-          <div className="relative">
-            <ControlBarButton
-              icon={ZSecurity}
-              label="Security"
-              active={securityMenu}
-              onClick={() => setSecurityMenu((v) => !v)}
-            />
-            {securityMenu && controls && (
-              <>
-                <div
-                  className="fixed inset-0 z-10"
-                  onClick={() => setSecurityMenu(false)}
-                />
-                <div className="absolute bottom-full left-0 z-20 mb-3">
-                  <SecurityMenu
-                    locked={controls.locked}
-                    waitingRoomEnabled={controls.waitingRoomEnabled}
-                    permissions={controls.permissions}
-                    onToggleLock={() => onToggleLock?.()}
-                    onToggleWaitingRoom={() => onToggleWaitingRoom?.()}
-                    onTogglePermission={(p) => onTogglePermission?.(p)}
-                  />
-                </div>
-              </>
-            )}
-          </div>
-        )}
         <ControlBarButton
           icon={ZParticipants}
           label="Participants"
@@ -267,18 +240,49 @@ export default function ControlBar({
         <ControlBarButton
           icon={ZChat}
           label="Chat"
+          hasMenu
           active={activePanel === "chat"}
           disabled={chatBlocked}
+          menuDisabled={chatBlocked}
           title={chatBlocked ? "The host has disabled chat for participants" : undefined}
           onClick={() => !chatBlocked && onOpenPanel("chat")}
+          onMenuClick={() => !chatBlocked && onOpenPanel("chat")}
         />
 
-        {/* Share Screen (green) + chevron menu with Whiteboard */}
+        <div className="relative">
+          <ControlBarButton
+            icon={ZReaction}
+            label="React"
+            active={reactionsMenu}
+            onClick={() => setReactionsMenu((v) => !v)}
+          />
+          {reactionsMenu && (
+            <>
+              <div
+                className="fixed inset-0 z-10"
+                onClick={() => setReactionsMenu(false)}
+              />
+              <div className="absolute bottom-full left-1/2 z-20 mb-3 -translate-x-1/2">
+                <ReactionsFlyout
+                  onReact={(emoji) => {
+                    onReact?.(emoji);
+                    setReactionsMenu(false);
+                  }}
+                  onRaiseHand={() => {
+                    onRaiseHand?.();
+                    setReactionsMenu(false);
+                  }}
+                />
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Share Screen + chevron menu with Whiteboard */}
         <div className="relative">
           <ControlBarButton
             icon={ZShareScreen}
-            label="Share Screen"
-            green
+            label="Share"
             // Chevron stays available even when sharing is blocked so Whiteboard
             // (which lives in this menu) remains reachable; only the main
             // Share-Screen action and its menu row are disabled.
@@ -328,56 +332,82 @@ export default function ControlBar({
           )}
         </div>
 
-        <ControlBarButton
-          icon={ZPolling}
-          label="Polling"
-          active={activePanel === "polls"}
-          onClick={() => onOpenPanel("polls")}
-        />
         {isHost && (
-          <ControlBarButton
-            icon={ZRecord}
-            label={recordingActive ? "Stop" : "Record"}
-            danger={recordingActive}
-            disabled={recordingBusy}
-            title={
-              recordingBusy ? "Recording is starting/stopping..." : undefined
-            }
-            onClick={onToggleRecording}
-          />
+          <div className="relative">
+            <ControlBarButton
+              icon={ZSecurity}
+              label="Host tools"
+              active={securityMenu}
+              onClick={() => setSecurityMenu((v) => !v)}
+            />
+            {securityMenu && controls && (
+              <>
+                <div
+                  className="fixed inset-0 z-10"
+                  onClick={() => setSecurityMenu(false)}
+                />
+                <div className="absolute bottom-full left-0 z-20 mb-3">
+                  <SecurityMenu
+                    locked={controls.locked}
+                    waitingRoomEnabled={controls.waitingRoomEnabled}
+                    permissions={controls.permissions}
+                    onToggleLock={() => onToggleLock?.()}
+                    onToggleWaitingRoom={() => onToggleWaitingRoom?.()}
+                    onTogglePermission={(p) => onTogglePermission?.(p)}
+                  />
+                </div>
+              </>
+            )}
+          </div>
         )}
-        {pipSupported && (
-          <ControlBarButton
-            icon={PictureInPicture2}
-            label="Picture in Picture"
-            active={pipActive}
-            onClick={onTogglePip}
-          />
-        )}
+
+        {/* More: the remaining tools (polls, record, picture-in-picture) */}
         <div className="relative">
           <ControlBarButton
-            icon={ZReaction}
-            label="Reactions"
-            active={reactionsMenu}
-            onClick={() => setReactionsMenu((v) => !v)}
+            icon={MoreHorizontal}
+            label="More"
+            active={moreMenu}
+            onClick={() => setMoreMenu((v) => !v)}
           />
-          {reactionsMenu && (
+          {moreMenu && (
             <>
-              <div
-                className="fixed inset-0 z-10"
-                onClick={() => setReactionsMenu(false)}
-              />
-              <div className="absolute bottom-full left-1/2 z-20 mb-3 -translate-x-1/2">
-                <ReactionsFlyout
-                  onReact={(emoji) => {
-                    onReact?.(emoji);
-                    setReactionsMenu(false);
+              <div className="fixed inset-0 z-10" onClick={() => setMoreMenu(false)} />
+              <div className="absolute bottom-16 right-0 z-20 w-56 overflow-hidden rounded-lg bg-panel-2 py-1 shadow-lg ring-1 ring-panel-border">
+                <button
+                  onClick={() => {
+                    setMoreMenu(false);
+                    onOpenPanel("polls");
                   }}
-                  onRaiseHand={() => {
-                    onRaiseHand?.();
-                    setReactionsMenu(false);
-                  }}
-                />
+                  className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-text-primary hover:bg-hover"
+                >
+                  <ZPolling className="h-4 w-4" /> Polls
+                </button>
+                {isHost && (
+                  <button
+                    onClick={() => {
+                      setMoreMenu(false);
+                      onToggleRecording?.();
+                    }}
+                    disabled={recordingBusy}
+                    title={recordingBusy ? "Recording is starting/stopping..." : undefined}
+                    className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-text-primary hover:bg-hover disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                  >
+                    <ZRecord className={recordingActive ? "h-4 w-4 text-leave-hover" : "h-4 w-4"} />
+                    {recordingActive ? "Stop Recording" : "Record"}
+                  </button>
+                )}
+                {pipSupported && (
+                  <button
+                    onClick={() => {
+                      setMoreMenu(false);
+                      onTogglePip?.();
+                    }}
+                    className="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-text-primary hover:bg-hover"
+                  >
+                    <PictureInPicture2 className="h-4 w-4" />
+                    {pipActive ? "Exit Picture in Picture" : "Picture in Picture"}
+                  </button>
+                )}
               </div>
             </>
           )}

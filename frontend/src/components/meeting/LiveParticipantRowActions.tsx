@@ -22,7 +22,7 @@ export default function LiveParticipantRowActions({
         className="flex h-6 w-6 items-center justify-center rounded hover:bg-hover"
         aria-label="Participant actions"
       >
-        <MoreHorizontal className="h-4 w-4 text-text-secondary" />
+        <MoreHorizontal className="h-4 w-4 text-white" />
       </button>
       {open && (
         <>
